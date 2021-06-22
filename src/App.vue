@@ -1,14 +1,24 @@
 <template>
 	<div :class="['web-rtc', { 'rtc-mobile': isMobile }]">
 		<Rooms @create-room="createRoom" @call="call"></Rooms>
-
 		<transition name="play">
-			<div class="play">
-				<nav v-if="isMobile">
-					<!-- <div class="back" @click="isShowVideo = false">&lt; 返回房间</div> -->
-					<div class="back" @click="isShowChat = !isShowChat">&#8593; 聊天</div>
-				</nav>
+			<div class="play" v-if="room">
+				<div class="play-room_name" v-if="isMobile">{{ room.explain.name }}</div>
 				<play :streams="streams"> </play>
+				<div class="mobile-chat_entry" @click="showMobileChat" v-if="isMobile && peersLength">
+					<div class="not-read" v-if="notReadMessage">{{notReadMessage}}</div>
+					<img src="~assets/logo.svg" />
+				</div>
+				<transition name="grow-big">
+					<div
+						class="mobile-chat-content"
+						@click.self="isShowMobileChat = false"
+						v-if="isShowMobileChat"
+					>
+						<chat :chats="chats" class="mobile-chat" :isMobile="true" @send="send"></chat>
+					</div>
+				</transition>
+
 				<div class="self-btns">
 					<i
 						class="iconfont icon-mic"
@@ -33,12 +43,7 @@
 				</div>
 			</div>
 		</transition>
-		<chat
-			:chats="chats"
-			v-if="peersLength && (isShowChat || !isMobile)"
-			:isMobile="isMobile"
-			@send="send"
-		></chat>
+		<chat :chats="chats" v-if="peersLength && !isMobile" :isMobile="isMobile" @send="send"></chat>
 	</div>
 </template>
 
@@ -55,7 +60,6 @@ const rtcManager = new RTCManager()
 
 window.rtcManager = rtcManager
 
-
 export default {
 	components: {
 		Rooms,
@@ -64,8 +68,8 @@ export default {
 	},
 	data() {
 		return {
-			shiftdown: false,
 			streams: [],
+
 			/**
 			 * {pendingSize, size,isSelf, user,fileName}
 			 */
@@ -73,6 +77,9 @@ export default {
 			isShowChat: false,
 			peersLength: 0,
 			slefVideoBtnStatus: { audio: false, desktopShare: false, video: false, cameraSwitch: false },
+			room: null,
+			isShowMobileChat: false,
+			notReadMessage: 0,
 		}
 	},
 	computed: {
@@ -82,6 +89,15 @@ export default {
 	},
 
 	methods: {
+		addChatMessage(msg) {
+
+			this.chats.push(msg)
+			this.notReadMessage ++
+		},
+		showMobileChat() {
+			this.notReadMessage = 0
+			this.isShowMobileChat = true
+		},
 		selfMediaStatusChange(type) {
 			console.log(type)
 			rtcManager
@@ -97,12 +113,14 @@ export default {
 			this.chats = []
 			rtcManager.clear()
 			rtcManager.createRoom(data)
+			this.room = data
 		},
 
-		call(picked) {
+		call({ roomid, roomInfo }) {
 			this.chats = []
 			rtcManager.clear()
-			rtcManager.call(picked)
+			rtcManager.call({ roomid, socketIds: roomInfo.socketIds })
+			this.room = roomInfo
 		},
 
 		sendTexts(texts) {
@@ -138,7 +156,7 @@ export default {
 				if (it.type === 'video' || it.type === 'img') {
 					this.getMedia(file, chatMsg)
 				} else {
-					this.chats.push(chatMsg)
+					this.addChatMessage(chatMsg)
 				}
 
 				const key = {
@@ -160,7 +178,7 @@ export default {
 		async getMedia(blob, desc) {
 			const file = URL.createObjectURL(blob)
 			desc.file = file
-			this.chats.push(desc)
+			this.addChatMessage(desc)
 		},
 
 		send(e) {
@@ -172,7 +190,7 @@ export default {
 			fileLoad({ data, name: desc.fileName })
 		},
 		async getChatText(chat) {
-			this.chats.push(chat)
+			this.addChatMessage(chat)
 		},
 
 		_streamChange(streams) {
@@ -186,7 +204,7 @@ export default {
 			let chat = this.chats.find(it => it.hash === e.desc.hash)
 			if (!chat) {
 				chat = { ...e.desc, percent: e.percent }
-				this.chats.push(chat)
+				this.addChatMessage(chat)
 			}
 			chat.percent = e.percent
 		},
@@ -208,73 +226,137 @@ export default {
 video {
 	outline: none;
 }
-// .web-rtc.rtc-mobile {
-// 	grid-template-columns: 1fr;
-// 	padding: 20px;
-// 	.chat-enter {
-// 		transform: translateY(100%);
-// 	}
-// 	.chat-enter-to {
-// 		transform: translateY(0);
-// 	}
-// 	.chat-leave {
-// 		transform: translateY(0);
-// 	}
-// 	.chat-leave-to {
-// 		transform: translateY(100%);
-// 	}
+.web-rtc.rtc-mobile {
+	grid-template-columns: 1fr;
+	padding: 20px;
+	.rooms {
+		height: 100%;
+	}
 
-// 	.chat {
-// 		position: fixed;
-// 		top: 0;
-// 		right: 0;
-// 		left: 0;
-// 		bottom: 0;
-// 		background: #fff;
-// 		display: flex;
-// 		flex-direction: column;
-// 		padding: 20px;
-// 		transition: all 0.3s;
+	.mobile-chat_entry {
+		position: absolute;
+		bottom: 50vw;
+		width: 40px;
+		height: 40px;
+		right: 20px;
+		img {
+			width: 100%;
+		}
+	}
+	.not-read{
+		position: absolute;
+		$w:20px;
+		padding: 0 $w/4;
+		height: $w;
+		border-radius: $w/2;
+		// border: 1px solid #a3d4ff;
+		background: red;
+		text-align: center;
+		line-height: $w;
+		right: -$w/3;
+		top: -$w/3;
+		color: #fff;
+	}
+	.mobile-chat-content {
+		position: absolute;
+		left: 0;
+		right: 0;
+		bottom: 0;
+		top: 0;
+	}
+	.mobile-chat {
+		position: absolute;
+		bottom: 20vh;
+		top: 20vh;
+		left: 30px;
+		right: 0;
+		background: #fff;
+		z-index: 3;
+		box-shadow: 0 0px 6px 0px #a3d4ff;
+		.content {
+			border: none;
+			background: #fff;
+			border-bottom: 1px solid #efefeb;
+		}
+		.edit-content {
+			border: none;
+		}
+	}
+	.mobile-chat-content {
+		transition: all 0.3s;
+		transform-origin: calc(100vw - 40px) calc(100vh - 54vw);
+	}
+	.grow-big-enter {
+		transform: scale(0);
+	}
+	.grow-big-enter-to {
+		transform: scale(1);
+	}
+	.grow-big-leave {
+		transform: scale(1);
+	}
+	.grow-big-leave-to {
+		transform: scale(0);
+	}
 
-// 		nav {
-// 			display: flex;
-// 			justify-content: flex-end;
-// 			margin-bottom: 10px;
-// 		}
-// 		.content {
-// 			min-height: 200px;
-// 			height: auto;
-// 			flex: 3 1 200px;
-// 		}
-// 		.edit-content {
-// 			flex: 1;
-// 		}
-// 	}
-// 	.play-enter,
-// 	.play-leave-to {
-// 		transform: translateX(100%);
-// 	}
-// 	.play-enter-to,
-// 	.play-leave {
-// 		transform: translateX(0);
-// 	}
-// 	div.play {
-// 		position: fixed;
-// 		top: 0;
-// 		bottom: 0;
-// 		left: 0;
-// 		right: 0;
-// 		background: #fff;
-// 		transition: all 0.3s;
-// 		padding: 20px;
+	// .chat {
+	// 	position: fixed;
+	// 	top: 0;
+	// 	right: 0;
+	// 	left: 0;
+	// 	bottom: 0;
+	// 	background: #fff;
+	// 	display: flex;
+	// 	flex-direction: column;
+	// 	padding: 20px;
+	// 	transition: all 0.3s;
 
-// 		.back {
-// 			margin-bottom: 10px;
-// 			color: #666;
-// 		}
-// 	}
-// }
+	// 	nav {
+	// 		display: flex;
+	// 		justify-content: flex-end;
+	// 		margin-bottom: 10px;
+	// 	}
+	// 	.content {
+	// 		min-height: 200px;
+	// 		height: auto;
+	// 		flex: 3 1 200px;
+	// 	}
+	// 	.edit-content {
+	// 		flex: 1;
+	// 	}
+	// }
+	.play-enter,
+	.play-leave-to {
+		transform: translateX(100%);
+	}
+	.play-enter-to,
+	.play-leave {
+		transform: translateX(0);
+	}
+	div.play {
+		position: fixed;
+		top: 0;
+		bottom: 0;
+		left: 0;
+		right: 0;
+		background: #fff;
+		transition: all 0.3s;
+		padding: 40px 0;
 
+		.back {
+			margin-bottom: 10px;
+			color: #666;
+		}
+	}
+}
+.play-room_name {
+	position: absolute;
+	top: 5px;
+	text-align: center;
+	left: 0;
+	right: 0;
+	font-size: 24px;
+}
 .web-rtc {
 	max-width: 1280px;
 	margin: 0 auto;
@@ -282,11 +364,12 @@ video {
 	display: grid;
 	grid-template-columns: 200px 4fr 400px;
 	grid-gap: 0 10px;
+
 	.play {
 		display: flex;
 		flex-wrap: wrap;
 		align-content: flex-start;
-		min-width: 460px;
+		min-width: 100px;
 		border: 1px solid #ccc;
 		position: relative;
 		.self-btns {
@@ -310,7 +393,6 @@ video {
 			justify-content: space-between;
 			width: 100%;
 		}
-
 	}
 
 	.rtc-room {

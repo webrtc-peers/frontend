@@ -1,7 +1,7 @@
 <template>
 	<transition name="chat">
 		<div class="chat">
-			<Message :chats="chats" :isMobile="isMobile"></Message>
+			<Message :chats="chats"  :isMobile="isMobile"></Message>
 			<Edit v-on="$listeners"></Edit>
 		</div>
 	</transition>
@@ -12,7 +12,7 @@ import Edit from './edit'
 import Message from './message'
 
 export default {
-	props: { chats: Array, isMobile: Boolean },
+	props: { chats: Array, isMobile: Boolean ,},
 	components: {
 		Edit,
 		Message,
@@ -58,6 +58,7 @@ export default {
 	.file-icon {
 		font-size: 50px;
 		color: grey;
+		margin-right: 3px;
 	}
 	.chat-file {
 		text-align: left;
@@ -72,7 +73,7 @@ export default {
 		border: 1px solid #ccc;
 		padding: 4px 10px;
 		overflow: auto;
-		background: #f7f7f7;
+		// background: #f7f7f7;
 		&:hover {
 			&.content::-webkit-scrollbar {
 				opacity: 1;

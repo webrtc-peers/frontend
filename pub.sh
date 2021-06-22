@@ -1,10 +1,10 @@
  
-read -p '确认发布前端代码请入ok: ' qd
-if [ $qd != 'ok' ]
-then
-  echo '取消发布'
-  exit 0
-fi
+# read -p '确认发布前端代码请入ok: ' qd
+# if [ $qd != 'ok' ]
+# then
+#   echo '取消发布'
+#   exit 0
+# fi
 
 echo '2、打包'
 npm run build

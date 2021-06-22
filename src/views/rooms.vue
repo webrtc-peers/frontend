@@ -2,14 +2,12 @@
 	<nav class="rtc-room">
 		<div class="btns">
 			<button type="text" @click="dialogVisible = true">创建房间</button>
-			<button type="text" @click="jion(picked)">加入房间</button>
 		</div>
 		<ul v-if="rooms" class="rooms">
 			<li
 				v-for="(val, key) in rooms"
-				@dblclick="jion(key)"
 				:key="key"
-				@click="picked = key"
+				@click="jion(key)"
 				:class="{ picked: picked === key }"
 			>
 				<div class="info">
@@ -106,7 +104,6 @@ export default {
 				return toast('请先选择房间')
       }
       this.picked = picked
-
 			const data = this.rooms[picked]
 			if (this.inRoomid === picked) {
 				return this.$emit('show-video')
@@ -117,7 +114,7 @@ export default {
 			}
 			this.secretDialog = false
 			this.inRoomid = picked
-			this.$emit('call', { roomid: picked, socketIds: data.socketIds })
+			this.$emit('call', { roomid: picked, roomInfo: data })
 		},
 
 		confSecret() {
@@ -125,7 +122,7 @@ export default {
 			if (this.fillSecret !== data.explain.secret) {
 				return (this.secretError = '密码错误')
 			}
-			this.jion()
+			this.jion(this.picked)
 		},
 	},
 	created() {

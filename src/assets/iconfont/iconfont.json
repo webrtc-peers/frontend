@@ -6,6 +6,34 @@
   "description": "",
   "glyphs": [
     {
+      "icon_id": "7466506",
+      "name": "多人在线聊天，聊天，群聊",
+      "font_class": "chat",
+      "unicode": "e692",
+      "unicode_decimal": 59026
+    },
+    {
+      "icon_id": "12897971",
+      "name": "PPT",
+      "font_class": "ppt",
+      "unicode": "e600",
+      "unicode_decimal": 58880
+    },
+    {
+      "icon_id": "13301799",
+      "name": "word",
+      "font_class": "word",
+      "unicode": "e601",
+      "unicode_decimal": 58881
+    },
+    {
+      "icon_id": "13301872",
+      "name": "excel",
+      "font_class": "excel",
+      "unicode": "e61d",
+      "unicode_decimal": 58909
+    },
+    {
       "icon_id": "448372",
       "name": "Folder Icon",
       "font_class": "folder",

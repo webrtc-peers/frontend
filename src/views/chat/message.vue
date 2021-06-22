@@ -16,7 +16,8 @@
 					<img v-else-if="val.type === 'img'" class="img" :src="val.file" />
 					<div v-else class="chat-file">
 						<div class="file-info">
-							<i class="icon-file iconfont file-icon"></i>
+							<v-icon class="file-icon" :name="getIcon(val.fileName)"></v-icon>
+							<!-- <i class="icon-file iconfont file-icon" ></i> -->
 							<span class="file-name">{{ val.fileName }}</span>
 						</div>
 						<v-progress
@@ -49,6 +50,16 @@ export default {
 			return arr
 		},
 	},
+	methods:{
+		getIcon(filename) {
+			const arr = filename.split('.')
+			const ext = arr[arr.length-1]
+			if(ext.includes('ppt')) return '#icon-ppt'
+			if(ext.includes('xl')) return '#icon-excel'
+			if(ext.includes('doc')) return '#icon-docx'
+			return '#icon-zip'
+		}
+	},
 	watch: {
 		async 'chats.length'() {
 			const div = this.$refs.chat
@@ -57,6 +68,9 @@ export default {
 			this.$refs.chat.scrollTop = this.$refs.chat.scrollHeight
 		},
 	},
+	mounted() {
+		this.$refs.chat.scrollTop = this.$refs.chat.scrollHeight
+	}
 }
 </script>
 
