@@ -1,11 +1,5 @@
-
+import { createApp } from 'vue'
 import '@/style/init.scss'
-import '@/components'
-import Vue from 'vue'
-import App from './App'
-Vue.config.productionTip = false
+import App from './App.vue'
 
-window.vm = new Vue({
-  el: '#app',
-  render:h => h(App)
-})
+createApp(App).mount('#app')

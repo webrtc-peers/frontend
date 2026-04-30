@@ -7,12 +7,19 @@
   </div>
 </template>
 
-<script>
-export default {
-  props: {
-    percentage: Number
-  }
-}
+<script setup lang="ts">
+withDefaults(
+	defineProps<{
+		percentage?: number
+		color?: string
+		status?: string
+	}>(),
+	{
+		percentage: 0,
+		color: undefined,
+		status: undefined,
+	}
+)
 </script>
 
 <style lang="scss" scoped>

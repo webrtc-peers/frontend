@@ -4,13 +4,12 @@
 	</svg>
 </template>
 
-<script>
+<script setup lang="ts">
 import '@/assets/iconfont/iconfont.js'
-export default {
-	props: {
-		name: String,
-	},
-}
+
+defineProps<{
+	name?: string
+}>()
 </script>
 
 <style>

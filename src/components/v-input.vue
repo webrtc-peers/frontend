@@ -1,22 +1,35 @@
 <template>
-  <div :class="['v-input', {error}]">
+  <div :class="['v-input', { error }]">
     <input
       v-bind="$attrs"
-      :value="value"
-      @input="e => $emit('input', e.target.value)"
-      @focus="$emit('update:error', '')"
-      :class="{error}"
+      :value="modelValue"
+      @input="emit('update:modelValue', ($event.target as HTMLInputElement).value)"
+      @focus="emit('update:error', '')"
+      :class="{ error }"
     />
-    <span class="err-tips">{{error}}</span>
+    <span class="err-tips">{{ error }}</span>
   </div>
 </template>
-<script>
-export default {
-  props: {
-    error: String,
-    value: String
-  }
-}
+<script setup lang="ts">
+defineOptions({
+	inheritAttrs: false,
+})
+
+withDefaults(
+	defineProps<{
+		error?: string
+		modelValue?: string
+	}>(),
+	{
+		error: '',
+		modelValue: '',
+	}
+)
+
+const emit = defineEmits<{
+	(e: 'update:modelValue', value: string): void
+	(e: 'update:error', value: string): void
+}>()
 </script>
 
 <style lang="scss" >
@@ -50,4 +63,3 @@ export default {
   }
 }
 </style>
-

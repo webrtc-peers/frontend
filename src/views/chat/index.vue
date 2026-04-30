@@ -1,23 +1,40 @@
 <template>
 	<transition name="chat">
 		<div class="chat">
-			<Message :chats="chats"  :isMobile="isMobile"></Message>
-			<Edit v-on="$listeners"></Edit>
+			<Message :chats="chats" :isMobile="isMobile"></Message>
+			<Edit v-bind="$attrs"></Edit>
 		</div>
 	</transition>
 </template>
 
-<script>
-import Edit from './edit'
-import Message from './message'
+<script setup lang="ts">
+import Edit from './edit.vue'
+import Message from './message.vue'
 
-export default {
-	props: { chats: Array, isMobile: Boolean ,},
-	components: {
-		Edit,
-		Message,
-	},
+defineOptions({
+	inheritAttrs: false,
+})
+
+interface ChatMessage {
+	hash?: string
+	msg?: string
+	user?: string
+	type?: 'text' | 'file' | 'video' | 'img'
+	file?: string | Blob | File
+	fileName?: string
+	isSelf?: boolean
+	percent?: number
 }
+
+withDefaults(
+	defineProps<{
+		chats: ChatMessage[]
+		isMobile?: boolean
+	}>(),
+	{
+		isMobile: false,
+	}
+)
 </script>
 
 <style lang="scss">

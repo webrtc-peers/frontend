@@ -18,124 +18,159 @@
 						{{ val.explain.tips }}
 					</div>
 				</div>
-				<img src="~assets/lock.svg" v-if="val.explain.secret" class="lock" />
+				<img src="@/assets/lock.svg" v-if="val.explain.secret" class="lock" />
 			</li>
 		</ul>
 		<transition name="v-dialog">
-			<v-dialog v-if="dialogVisible" class="create-room-dialog">
+			<VDialog v-if="dialogVisible" class="create-room-dialog">
 				<template #title>创建房间</template>
 				<template #body>
-					<v-row class="room-name">
-						<span slot="left">房间名:</span>
-						<v-input slot="right" v-model="name"></v-input>
-					</v-row>
-					<v-row class="room-tips">
-						<span slot="left">房间描述:</span>
-						<v-input slot="right" v-model="tips"></v-input>
-					</v-row>
-					<v-row class="room-tips">
-						<span slot="left">密码:</span>
-						<v-input slot="right" v-model="secret"></v-input>
-					</v-row>
+					<VRow class="room-name">
+						<template #left>
+							<span>房间名:</span>
+						</template>
+						<template #right>
+							<VInput v-model="name"></VInput>
+						</template>
+					</VRow>
+					<VRow class="room-tips">
+						<template #left>
+							<span>房间描述:</span>
+						</template>
+						<template #right>
+							<VInput v-model="tips"></VInput>
+						</template>
+					</VRow>
+					<VRow class="room-tips">
+						<template #left>
+							<span>密码:</span>
+						</template>
+						<template #right>
+							<VInput v-model="secret"></VInput>
+						</template>
+					</VRow>
 				</template>
 				<template #footer>
 					<button @click="dialogVisible = false" class="cancel">取 消</button>
 					<button @click="createRoom" class="conf">确 定</button>
 				</template>
-			</v-dialog>
+			</VDialog>
 		</transition>
 		<transition name="v-dialog">
-			<v-dialog v-if="secretDialog">
+			<VDialog v-if="secretDialog">
 				<template #title>
 					请输入密码
 				</template>
 				<template #body>
-					<v-input v-model="fillSecret" :error.sync="secretError"></v-input>
+					<VInput v-model="fillSecret" v-model:error="secretError"></VInput>
 				</template>
 				<template #footer>
 					<button @click="secretDialog = false" class="cancel">取 消</button>
 					<button @click="confSecret" class="conf">确 定</button>
 				</template>
-			</v-dialog>
+			</VDialog>
 		</transition>
 	</nav>
 </template>
 
-<script>
+<script setup lang="ts">
+import { computed, onBeforeUnmount, ref } from 'vue'
 import socket from '@/socket'
-import uuid from 'uuid/v4'
+import { v4 as uuidv4 } from 'uuid'
 import { toast } from '@/tools/utils'
-export default {
-	computed: {
-		user() {
-			return this.$store.state.user
-		},
-	},
-	data() {
-		return {
-			rooms: null,
-			dialogVisible: false,
-			name: this.user && (this.user.nickName || this.user.account),
-			tips: '',
-			picked: '',
-			secret: '',
-			fillSecret: '',
-			secretDialog: false,
-			secretError: '',
-		}
-	},
-	methods: {
-		createRoom() {
-			let name = this.name
-			if (!name) {
-				name = this.user.nickName || this.user.account
-			}
-			this.picked = uuid()
-			this.inRoomid = this.picked
-			this.dialogVisible = false
-			this.$emit('create-room', {
-				explain: { name, tips: this.tips, secret: this.secret },
-				roomid: this.picked,
-			})
-		},
+import VDialog from '@/components/v-dialog.vue'
+import VInput from '@/components/v-input.vue'
+import VRow from '@/components/v-row.vue'
 
-		jion(picked) {
-			if (!picked) {
-				return toast('请先选择房间')
-      }
-      this.picked = picked
-			const data = this.rooms[picked]
-			if (this.inRoomid === picked) {
-				return this.$emit('show-video')
-			}
-
-			if (this.fillSecret !== data.explain.secret) {
-				return (this.secretDialog = true)
-			}
-			this.secretDialog = false
-			this.inRoomid = picked
-			this.$emit('call', { roomid: picked, roomInfo: data })
-		},
-
-		confSecret() {
-			const data = this.rooms[this.picked]
-			if (this.fillSecret !== data.explain.secret) {
-				return (this.secretError = '密码错误')
-			}
-			this.jion(this.picked)
-		},
-	},
-	created() {
-		this._rooms = rooms => {
-			this.rooms = rooms
-		}
-
-		socket.on('rooms', this._rooms)
-	},
-	beforeDestroy() {
-		socket.off('rooms', this._rooms)
-	},
+interface UserInfo {
+	nickName?: string
+	account?: string
 }
+
+interface RoomExplain {
+	name: string
+	tips: string
+	secret: string
+}
+
+interface RoomInfo {
+	explain: RoomExplain
+	socketIds?: Array<{ id: string }>
+}
+
+type RoomsMap = Record<string, RoomInfo>
+
+const emit = defineEmits<{
+	(e: 'create-room', payload: { explain: RoomExplain; roomid: string }): void
+	(e: 'call', payload: { roomid: string; roomInfo: RoomInfo }): void
+	(e: 'show-video'): void
+}>()
+
+const user = computed<UserInfo | null>(() => null)
+const rooms = ref<RoomsMap | null>(null)
+const dialogVisible = ref(false)
+const name = ref(user.value?.nickName || user.value?.account || '')
+const tips = ref('')
+const picked = ref('')
+const secret = ref('')
+const fillSecret = ref('')
+const secretDialog = ref(false)
+const secretError = ref('')
+const inRoomid = ref('')
+
+function createRoom() {
+	let roomName = name.value
+	if (!roomName && user.value) {
+		roomName = user.value.nickName || user.value.account || ''
+	}
+	picked.value = uuidv4()
+	inRoomid.value = picked.value
+	dialogVisible.value = false
+	emit('create-room', {
+		explain: { name: roomName, tips: tips.value, secret: secret.value },
+		roomid: picked.value,
+	})
+}
+
+function jion(nextPicked: string) {
+	if (!nextPicked) {
+		return toast('请先选择房间')
+	}
+	picked.value = nextPicked
+	const data = rooms.value?.[nextPicked]
+	if (!data) return
+	if (inRoomid.value === nextPicked) {
+		return emit('show-video')
+	}
+
+	if (fillSecret.value !== data.explain.secret) {
+		secretDialog.value = true
+		return
+	}
+	secretDialog.value = false
+	inRoomid.value = nextPicked
+	emit('call', { roomid: nextPicked, roomInfo: data })
+}
+
+function confSecret() {
+	const data = rooms.value?.[picked.value]
+	if (!data) return
+	if (fillSecret.value !== data.explain.secret) {
+		secretError.value = '密码错误'
+		return
+	}
+	jion(picked.value)
+}
+
+const handleRooms = (nextRooms: RoomsMap) => {
+	rooms.value = nextRooms
+}
+
+socket.on('rooms', handleRooms)
+
+onBeforeUnmount(() => {
+	socket.off('rooms', handleRooms)
+})
 </script>
 <style lang="scss">
 .rtc-room {

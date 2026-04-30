@@ -1,13 +1,13 @@
 <template>
-	<div :class="['web-rtc', { 'rtc-mobile': isMobile }]">
+	<div :class="['web-rtc', { 'rtc-mobile': isMobileView }]">
 		<Rooms @create-room="createRoom" @call="call"></Rooms>
 		<transition name="play">
 			<div class="play" v-if="room">
-				<div class="play-room_name" v-if="isMobile">{{ room.explain.name }}</div>
-				<play :streams="streams"> </play>
-				<div class="mobile-chat_entry" @click="showMobileChat" v-if="isMobile && peersLength">
-					<div class="not-read" v-if="notReadMessage">{{notReadMessage}}</div>
-					<img src="~assets/logo.svg" />
+				<div class="play-room_name" v-if="isMobileView">{{ room.explain.name }}</div>
+				<Play :streams="streams"> </Play>
+				<div class="mobile-chat_entry" @click="showMobileChat" v-if="isMobileView && peersLength">
+					<div class="not-read" v-if="notReadMessage">{{ notReadMessage }}</div>
+					<img src="@/assets/logo.svg" />
 				</div>
 				<transition name="grow-big">
 					<div
@@ -15,7 +15,7 @@
 						@click.self="isShowMobileChat = false"
 						v-if="isShowMobileChat"
 					>
-						<chat :chats="chats" class="mobile-chat" :isMobile="true" @send="send"></chat>
+						<Chat :chats="chats" class="mobile-chat" :isMobile="true" @send="send"></Chat>
 					</div>
 				</transition>
 
@@ -43,183 +43,245 @@
 				</div>
 			</div>
 		</transition>
-		<chat :chats="chats" v-if="peersLength && !isMobile" :isMobile="isMobile" @send="send"></chat>
+		<Chat :chats="chats" v-if="peersLength && !isMobileView" :isMobile="isMobileView" @send="send"></Chat>
 	</div>
 </template>
 
-<script>
-import Rooms from '@/views/rooms'
+<script setup lang="ts">
+import { computed, onBeforeUnmount, reactive, ref } from 'vue'
+import Rooms from '@/views/rooms.vue'
 import RTCManager from '@/views/rtc-manager'
-
-import Chat from '@/views/chat'
+import Chat from '@/views/chat/index.vue'
 import { isMobile, fileLoad } from '@/tools'
-import Play from '@/views/play'
+import Play from '@/views/play.vue'
 import socket from '@/socket'
 
-const rtcManager = new RTCManager()
+type StreamKind = 'audio' | 'video'
+
+interface StreamWithType extends MediaStream {
+	type?: StreamKind
+	isSelf?: boolean
+}
+
+interface ChatMessage {
+	hash?: string
+	msg?: string
+	user?: string
+	type?: 'text' | 'file' | 'video' | 'img'
+	file?: string | Blob | File
+	fileName?: string
+	isSelf?: boolean
+	percent?: number
+	total?: number
+	sendSize?: number
+	pendingSize?: number
+	size?: number
+}
+
+interface RoomExplain {
+	name: string
+	tips: string
+	secret: string
+}
+
+interface RoomPayload {
+	explain: RoomExplain
+	roomid: string
+	socketIds?: Array<{ id: string }>
+}
+
+interface SendFilePayload {
+	type: 'file' | 'video' | 'img'
+	file: File | Blob
+	fileName?: string
+	hash: string
+	[key: string]: unknown
+}
+
+interface SendPayload {
+	texts: string[]
+	files: SendFilePayload[]
+}
+
+interface FileProgressEvent {
+	desc: ChatMessage
+	percent: number
+}
+
+interface RTCManagerLike {
+	on: (event: string, handler: (...args: never[]) => void) => RTCManagerLike
+	off: (event: string, handler?: (...args: never[]) => void) => RTCManagerLike | false
+	clear: () => void
+	createRoom: (data: RoomPayload) => void
+	call: (data: { roomid: string; socketIds: Array<{ id: string }> }) => void
+	setSelfMediaStatus: (config: Record<string, boolean>) => Promise<unknown>
+	dcData: {
+		on: (event: string, handler: (...args: never[]) => void) => RTCManagerLike['dcData']
+		off: (event: string, handler?: (...args: never[]) => void) => RTCManagerLike['dcData'] | false
+		emit: (event: string, data: unknown, desc?: Record<string, unknown>) => void
+	}
+	dcFile: {
+		on: (event: string, handler: (...args: never[]) => void) => RTCManagerLike['dcFile']
+		off: (event: string, handler?: (...args: never[]) => void) => RTCManagerLike['dcFile'] | false
+		emit: (
+			event: string,
+			data: File | Blob,
+			desc?: Record<string, unknown>
+		) => (progress: (event: { total: number; sendSize: number; percent: number }) => void) => void
+	}
+}
+
+declare global {
+	interface Window {
+		rtcManager: RTCManagerLike
+	}
+}
+
+const rtcManager = new RTCManager() as RTCManagerLike
 
 window.rtcManager = rtcManager
 
-export default {
-	components: {
-		Rooms,
-		Play,
-		Chat,
-	},
-	data() {
-		return {
-			streams: [],
+const streams = ref<StreamWithType[]>([])
+const chats = ref<ChatMessage[]>([])
+const peersLength = ref(0)
+const slefVideoBtnStatus = reactive({ audio: false, desktopShare: false, video: false, cameraSwitch: false })
+const room = ref<RoomPayload | null>(null)
+const isShowMobileChat = ref(false)
+const notReadMessage = ref(0)
+const isMobileView = computed(() => isMobile)
 
-			/**
-			 * {pendingSize, size,isSelf, user,fileName}
-			 */
-			chats: [],
-			isShowChat: false,
-			peersLength: 0,
-			slefVideoBtnStatus: { audio: false, desktopShare: false, video: false, cameraSwitch: false },
-			room: null,
-			isShowMobileChat: false,
-			notReadMessage: 0,
-		}
-	},
-	computed: {
-		isMobile() {
-			return isMobile
-		},
-	},
-
-	methods: {
-		addChatMessage(msg) {
-
-			this.chats.push(msg)
-			this.notReadMessage ++
-		},
-		showMobileChat() {
-			this.notReadMessage = 0
-			this.isShowMobileChat = true
-		},
-		selfMediaStatusChange(type) {
-			console.log(type)
-			rtcManager
-				.setSelfMediaStatus({
-					...this.slefVideoBtnStatus,
-					[type]: !this.slefVideoBtnStatus[type],
-				})
-				.then(res => {
-					this.slefVideoBtnStatus[type] = !this.slefVideoBtnStatus[type]
-				})
-		},
-		createRoom(data) {
-			this.chats = []
-			rtcManager.clear()
-			rtcManager.createRoom(data)
-			this.room = data
-		},
-
-		call({ roomid, roomInfo }) {
-			this.chats = []
-			rtcManager.clear()
-			rtcManager.call({ roomid, socketIds: roomInfo.socketIds })
-			this.room = roomInfo
-		},
-
-		sendTexts(texts) {
-			if (!texts.length) return
-			texts.forEach(text => {
-				const sendData = {
-					msg: text,
-					user: socket.id,
-					type: 'text',
-				}
-				rtcManager.dcData.emit('chat', sendData)
-				this.getChatText({ ...sendData, isSelf: true })
-			})
-		},
-
-		async sendFiles(files) {
-			files.forEach(it => {
-				/*
-        *       type: 'file',
-        file: it.file,
-        fileName,
-        hash: it.hash,
-        */
-				const { file, ...data } = it
-
-				const chatMsg = {
-					...data,
-					isSelf: true,
-					percent: 0,
-					total: 0,
-					sendSize: 0,
-				}
-				if (it.type === 'video' || it.type === 'img') {
-					this.getMedia(file, chatMsg)
-				} else {
-					this.addChatMessage(chatMsg)
-				}
-
-				const key = {
-					video: 'chat-video',
-					img: 'chat-img',
-					file: 'chat-file',
-				}[it.type]
-
-				rtcManager.dcFile.emit(key, file, {
-					...data,
-					user: socket.id,
-				})(e => {
-					chatMsg.total = e.total
-					chatMsg.sendSize = e.sendSize
-					chatMsg.percent = e.percent
-				})
-			})
-		},
-		async getMedia(blob, desc) {
-			const file = URL.createObjectURL(blob)
-			desc.file = file
-			this.addChatMessage(desc)
-		},
-
-		send(e) {
-			this.sendFiles(e.files)
-			this.sendTexts(e.texts)
-		},
-
-		async getFile(data, desc) {
-			fileLoad({ data, name: desc.fileName })
-		},
-		async getChatText(chat) {
-			this.addChatMessage(chat)
-		},
-
-		_streamChange(streams) {
-			this.streams = streams
-		},
-
-		_peersChange(peers) {
-			this.peersLength = peers.length
-		},
-		getChatFileProgress(e) {
-			let chat = this.chats.find(it => it.hash === e.desc.hash)
-			if (!chat) {
-				chat = { ...e.desc, percent: e.percent }
-				this.addChatMessage(chat)
-			}
-			chat.percent = e.percent
-		},
-	},
-	created() {
-		rtcManager.on('streams', this._streamChange).on('peers:change', this._peersChange)
-
-		rtcManager.dcData.on('chat', this.getChatText)
-		rtcManager.dcFile
-			.on('chat-file', this.getFile)
-			.on('chat-file:progress', this.getChatFileProgress)
-			.on('chat-video', this.getMedia)
-			.on('chat-img', this.getMedia)
-	},
+function addChatMessage(msg: ChatMessage) {
+	chats.value.push(msg)
+	notReadMessage.value += 1
 }
+
+function showMobileChat() {
+	notReadMessage.value = 0
+	isShowMobileChat.value = true
+}
+
+async function selfMediaStatusChange(type: keyof typeof slefVideoBtnStatus) {
+	await rtcManager.setSelfMediaStatus({
+		...slefVideoBtnStatus,
+		[type]: !slefVideoBtnStatus[type],
+	})
+	slefVideoBtnStatus[type] = !slefVideoBtnStatus[type]
+}
+
+function createRoom(data: RoomPayload) {
+	chats.value = []
+	rtcManager.clear()
+	rtcManager.createRoom(data)
+	room.value = data
+}
+
+function call({ roomid, roomInfo }: { roomid: string; roomInfo: RoomPayload }) {
+	chats.value = []
+	rtcManager.clear()
+	rtcManager.call({ roomid, socketIds: roomInfo.socketIds ?? [] })
+	room.value = roomInfo
+}
+
+function sendTexts(texts: string[]) {
+	if (!texts.length) return
+	texts.forEach(text => {
+		const sendData: ChatMessage = {
+			msg: text,
+			user: socket.id,
+			type: 'text',
+		}
+		rtcManager.dcData.emit('chat', sendData)
+		getChatText({ ...sendData, isSelf: true })
+	})
+}
+
+function sendFiles(files: SendFilePayload[]) {
+	files.forEach(item => {
+		const { file, ...data } = item
+		const chatMsg: ChatMessage = {
+			...data,
+			isSelf: true,
+			percent: 0,
+			total: 0,
+			sendSize: 0,
+		}
+
+		if (item.type === 'video' || item.type === 'img') {
+			void getMedia(file, chatMsg)
+		} else {
+			addChatMessage(chatMsg)
+		}
+
+		const key = {
+			video: 'chat-video',
+			img: 'chat-img',
+			file: 'chat-file',
+		}[item.type]
+
+		rtcManager.dcFile.emit(key, file, {
+			...data,
+			user: socket.id,
+		})(event => {
+			chatMsg.total = event.total
+			chatMsg.sendSize = event.sendSize
+			chatMsg.percent = event.percent
+		})
+	})
+}
+
+async function getMedia(blob: Blob | File, desc: ChatMessage) {
+	const file = URL.createObjectURL(blob)
+	desc.file = file
+	addChatMessage(desc)
+}
+
+function send(payload: SendPayload) {
+	sendFiles(payload.files)
+	sendTexts(payload.texts)
+}
+
+function getFile(data: Blob, desc: ChatMessage) {
+	fileLoad({ data, name: desc.fileName })
+}
+
+function getChatText(chat: ChatMessage) {
+	addChatMessage(chat)
+}
+
+function handleStreamChange(nextStreams: StreamWithType[]) {
+	streams.value = nextStreams
+}
+
+function handlePeersChange(peers: unknown[]) {
+	peersLength.value = peers.length
+}
+
+function getChatFileProgress(event: FileProgressEvent) {
+	let chat = chats.value.find(item => item.hash === event.desc.hash)
+	if (!chat) {
+		chat = { ...event.desc, percent: event.percent }
+		addChatMessage(chat)
+	}
+	chat.percent = event.percent
+}
+
+rtcManager.on('streams', handleStreamChange).on('peers:change', handlePeersChange)
+rtcManager.dcData.on('chat', getChatText)
+rtcManager.dcFile
+	.on('chat-file', getFile)
+	.on('chat-file:progress', getChatFileProgress)
+	.on('chat-video', getMedia)
+	.on('chat-img', getMedia)
+
+onBeforeUnmount(() => {
+	rtcManager.off('streams', handleStreamChange)
+	rtcManager.off('peers:change', handlePeersChange)
+	rtcManager.dcData.off('chat', getChatText)
+	rtcManager.dcFile.off('chat-file', getFile)
+	rtcManager.dcFile.off('chat-file:progress', getChatFileProgress)
+	rtcManager.dcFile.off('chat-video', getMedia)
+	rtcManager.dcFile.off('chat-img', getMedia)
+})
 </script>
 
 <style lang="scss">

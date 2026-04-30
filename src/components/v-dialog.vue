@@ -15,15 +15,15 @@
   </div>
 </template>
 
-<script>
-export default {
-  props: {
-    isShowFooter: {
-      type: Boolean,
-      default: true
-    }
-  }
-}
+<script setup lang="ts">
+withDefaults(
+	defineProps<{
+		isShowFooter?: boolean
+	}>(),
+	{
+		isShowFooter: true,
+	}
+)
 </script>
 
 <style lang="scss">

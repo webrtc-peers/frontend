@@ -1,23 +1,27 @@
 {
-	"name": "test",
-	"version": "0.1.0",
-	"private": true,
-	"scripts": {
-		"serve": "vue-cli-service serve",
-		"build": "vue-cli-service build"
-	},
-	"dependencies": {
-		"core-js": "^2.6.5",
-		"regenerator-runtime": "^0.13.3",
-		"socket.io-client": "^2.3.0",
-		"v-viewer": "^1.5.1",
-		"vue": "^2.6.10"
-	},
-	"devDependencies": {
-		"@vue/cli-plugin-babel": "^3.11.0",
-		"@vue/cli-service": "^3.11.0",
-		"node-sass": "^4.13.0",
-		"sass-loader": "^7.1.0",
-		"vue-template-compiler": "^2.6.10"
-	}
+  "name": "webrtc-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "core-js": "^3.39.0",
+    "socket.io-client": "^4.8.1",
+    "uuid": "^11.0.5",
+    "v-viewer": "^3.0.21",
+    "viewerjs": "^1.11.7",
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@types/uuid": "^10.0.0",
+    "@vitejs/plugin-vue": "^5.2.3",
+    "sass": "^1.83.4",
+    "typescript": "^5.7.3",
+    "vite": "^6.1.0",
+    "vue-tsc": "^2.2.0"
+  }
 }

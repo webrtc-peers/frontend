@@ -13,15 +13,16 @@ export default class DataChannel extends EventEmitter{
 
 		this.emit = this.emit.bind(this)
 		this.trans = new DataTrans()
+		this.bufferLowThreshold = 256 * 1024
+		this.bufferHighWaterMark = 1024 * 1024
 
 		this.handleTransEvent()
 	}
 	async _onpackprogress(blob, header) {
 		const buff = await reader.readAsArrayBuffer(blob)
-		this.dc.send(buff)	
-		
-		console.log(this.dc.bufferedAmount)
-		if(this.dc.bufferedAmount) {
+		this.dc.send(buff)
+
+		if (this.dc.bufferedAmount > this.bufferHighWaterMark) {
 			await new Promise(r => (this.lowBuffer = r))
 		}
 
@@ -41,18 +42,22 @@ export default class DataChannel extends EventEmitter{
 	}
 	_dcEventHandler(dc) {
 		dc.binaryType = 'arraybuffer'
+		dc.bufferedAmountLowThreshold = this.bufferLowThreshold
 		dc.addEventListener('message', e => {
 			this.trans.unpacker.unpack(e.data)
 		})
 		dc.addEventListener('open', () => {
 			if (this.pc.sctp && this.pc.sctp.maxMessageSize) {
-				this.trans.setChunkSize(this.pc.sctp.maxMessageSize)
+				this.trans.setChunkSize(Math.min(Math.max(1024, this.pc.sctp.maxMessageSize - 1024), 48 * 1024))
 			}
 		})
 
 		dc.addEventListener('bufferedamountlow', () => {
-			console.log('low')
-			this.lowBuffer && this.lowBuffer()
+			if (this.lowBuffer) {
+				const resolve = this.lowBuffer
+				this.lowBuffer = null
+				resolve()
+			}
 		})
 	}
 	emit(key, ...data) {
