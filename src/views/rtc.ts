@@ -41,6 +41,7 @@ export default class RTC extends EventEmitter {
   id?: string
   toSocketId?: string
   dcs?: RTCDataChannelManager[]
+  pendingCandidates: RTCIceCandidateInit[] = []
 
   constructor({ config }: RTCConstructorOptions = {}) {
     super()
@@ -56,30 +57,45 @@ export default class RTC extends EventEmitter {
 
   createOffer(): Promise<RTCSessionDescriptionInit> {
     return this.pc.createOffer().then((offer: RTCSessionDescriptionInit) => {
-      this.pc.setLocalDescription(new RTCSessionDescription(offer))
-      return offer
+      return this.pc.setLocalDescription(new RTCSessionDescription(offer)).then(() => offer)
     })
   }
 
   createAnswer(): Promise<RTCSessionDescriptionInit> {
     return this.pc.createAnswer().then((answer: RTCSessionDescriptionInit) => {
-      this.pc.setLocalDescription(new RTCSessionDescription(answer))
-      return answer
+      return this.pc.setLocalDescription(new RTCSessionDescription(answer)).then(() => answer)
     })
   }
 
-  setAnswer(answer: RTCSessionDescriptionInit): void {
-    this.pc.setRemoteDescription(new RTCSessionDescription(answer))
+  async setAnswer(answer: RTCSessionDescriptionInit): Promise<void> {
+    await this.pc.setRemoteDescription(new RTCSessionDescription(answer))
+    await this.flushPendingCandidates()
   }
 
   async setOffer(offer: RTCSessionDescriptionInit): Promise<RTCSessionDescriptionInit> {
     await this.pc.setRemoteDescription(new RTCSessionDescription(offer))
+    await this.flushPendingCandidates()
     return this.createAnswer()
   }
 
-  setCandidate(candidate: RTCIceCandidateInit | null | undefined): void {
-    if (candidate) {
-      this.pc.addIceCandidate(new RTCIceCandidate(candidate))
+  async setCandidate(candidate: RTCIceCandidateInit | null | undefined): Promise<void> {
+    if (!candidate) return
+
+    if (!this.pc.remoteDescription) {
+      this.pendingCandidates.push(candidate)
+      return
+    }
+
+    await this.pc.addIceCandidate(new RTCIceCandidate(candidate))
+  }
+
+  async flushPendingCandidates(): Promise<void> {
+    if (!this.pc.remoteDescription || !this.pendingCandidates.length) return
+
+    const candidates = [...this.pendingCandidates]
+    this.pendingCandidates = []
+    for (const candidate of candidates) {
+      await this.pc.addIceCandidate(new RTCIceCandidate(candidate))
     }
   }
 

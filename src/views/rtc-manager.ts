@@ -1,6 +1,7 @@
 import RTC, { type RTCDataChannelManager } from './rtc'
 import socket from '@/socket'
 import { EventEmitter, randomStr, findDiff } from '@/tools'
+import { iceConfig, type RTCIceConfigurationExt } from '@/tools/ice-config'
 
 void findDiff
 
@@ -14,14 +15,6 @@ type SocketLike = {
 type LocalMediaType = 'video' | 'audio' | 'desktopShare'
 
 type LocalMediaEntry = { stream: MediaStream | null; config: any }
-
-type RTCIceServerConfig = RTCIceServer & {
-  urls: string | string[]
-}
-
-interface RTCIceConfigurationExt extends RTCConfiguration {
-  iceServers: RTCIceServerConfig[]
-}
 
 interface PeerConfig {
   toSocketId: string
@@ -107,17 +100,6 @@ const typedSocket = socket as SocketLike
 
 window.socket = typedSocket
 
-const iceConfig: RTCIceConfigurationExt = {
-  iceServers: [
-    { urls: ['stun:stun.freeswitch.org', 'stun:stun.ekiga.net'] },
-    {
-      urls: 'turn:web-play.cn:3478',
-      credential: 'g468291375',
-      username: '605661239@qq.com',
-    },
-  ],
-}
-
 export default class RTCManager extends EventEmitter {
   peers: RTC[] = []
   streams: MediaStream[] = []
@@ -166,8 +148,112 @@ export default class RTCManager extends EventEmitter {
     })
   }
 
+  formatCandidate(report: any): string {
+    if (!report) return 'unknown'
+    const address = report.address || report.ip || ''
+    const port = report.port ? `:${report.port}` : ''
+    const relatedAddress = report.relatedAddress ? ` related=${report.relatedAddress}:${report.relatedPort}` : ''
+    const url = report.url ? ` via=${report.url}` : ''
+    return `${report.id} ${report.candidateType}/${report.protocol} ${address}${port}${relatedAddress}${url}`
+  }
+
+  formatCandidatePair(report: any, stats: RTCStatsReport): string {
+    const local = stats.get(report.localCandidateId)
+    const remote = stats.get(report.remoteCandidateId)
+    const marker = report.nominated || report.selected ? ' selected' : ''
+    const rtt = report.currentRoundTripTime ? ` rtt=${report.currentRoundTripTime}` : ''
+    return `${report.id}${marker} state=${report.state} local=[${this.formatCandidate(local)}] remote=[${this.formatCandidate(remote)}]${rtt}`
+  }
+
+  getSelectedCandidatePair(stats: RTCStatsReport): any {
+    let selectedPair: any = null
+
+    stats.forEach((report: any) => {
+      if (report.type === 'transport' && report.selectedCandidatePairId) {
+        selectedPair = stats.get(report.selectedCandidatePairId)
+      }
+    })
+
+    if (selectedPair) return selectedPair
+
+    stats.forEach((report: any) => {
+      if (
+        report.type === 'candidate-pair' &&
+        report.state === 'succeeded' &&
+        (report.nominated || report.selected)
+      ) {
+        selectedPair = report
+      }
+    })
+
+    return selectedPair
+  }
+
+  async logIceDiagnostics(peer: RTC, reason: string): Promise<void> {
+    try {
+      const stats = await peer.pc.getStats()
+      const localCandidates: string[] = []
+      const remoteCandidates: string[] = []
+      const failedPairs: string[] = []
+      const succeededPairs: string[] = []
+
+      stats.forEach((report: any) => {
+        if (report.type === 'local-candidate') {
+          localCandidates.push(this.formatCandidate(report))
+        } else if (report.type === 'remote-candidate') {
+          remoteCandidates.push(this.formatCandidate(report))
+        } else if (report.type === 'candidate-pair') {
+          const pair = this.formatCandidatePair(report, stats)
+          if (report.state === 'failed') {
+            failedPairs.push(pair)
+          } else if (report.state === 'succeeded') {
+            succeededPairs.push(pair)
+          }
+        }
+      })
+
+      const selectedPair = this.getSelectedCandidatePair(stats)
+      if (selectedPair) {
+        const local = stats.get((selectedPair as any).localCandidateId) as any
+        const remote = stats.get((selectedPair as any).remoteCandidateId) as any
+        const isRelay = local?.candidateType === 'relay' || remote?.candidateType === 'relay'
+        console.log(
+          `[WebRTC] 连接类型: ${isRelay ? '中继(TURN)' : 'P2P(直连)'}`,
+          `本地: ${local?.candidateType || 'unknown'}/${local?.protocol || 'unknown'}`,
+          `远端: ${remote?.candidateType || 'unknown'}/${remote?.protocol || 'unknown'}`,
+        )
+        console.log(`[WebRTC][${peer.id}] selected pair (${reason})`, this.formatCandidatePair(selectedPair, stats))
+      } else {
+        console.warn(`[WebRTC][${peer.id}] no selected pair found (${reason})`)
+      }
+
+      console.log(`[WebRTC][${peer.id}] local candidates`, localCandidates)
+      console.log(`[WebRTC][${peer.id}] remote candidates`, remoteCandidates)
+      console.log(`[WebRTC][${peer.id}] succeeded pairs`, succeededPairs)
+      if (failedPairs.length) {
+        console.warn(`[WebRTC][${peer.id}] failed pairs`, failedPairs)
+      }
+    } catch (e) {
+      console.error('[WebRTC] 获取连接类型失败', e)
+    }
+  }
+
   async addEventListenner(peer: RTC, roomid?: string): Promise<void> {
-    peer.pc.onicecandidate = (e: RTCPeerConnectionIceEvent) => this.sendCandidate(peer, e.candidate)
+    peer.pc.onicecandidate = (e: RTCPeerConnectionIceEvent) => {
+      if (e.candidate) {
+        console.log(`[WebRTC][${peer.id}] local ice candidate`, e.candidate.type, e.candidate.protocol, e.candidate.address, e.candidate.port)
+      } else {
+        console.log(`[WebRTC][${peer.id}] local ice candidate complete`)
+        void this.logIceDiagnostics(peer, 'ice-gathering-complete')
+      }
+      this.sendCandidate(peer, e.candidate)
+    }
+    peer.pc.onicegatheringstatechange = () => {
+      console.log(`[WebRTC][${peer.id}] iceGatheringState=${peer.pc.iceGatheringState}`)
+    }
+    peer.pc.onicecandidateerror = (e: Event) => {
+      console.warn(`[WebRTC][${peer.id}] icecandidateerror`, e)
+    }
     peer.pc.onconnectionstatechange = (_e: Event) => {
       this.onStateChange({ peer, roomid })
       console.log(
@@ -247,13 +333,34 @@ export default class RTCManager extends EventEmitter {
 
   setAnswer(data: IncomingAnswerPayload): void {
     const peer = this.to(data.id)
-    peer?.setAnswer(data.answer)
+    peer?.setAnswer(data.answer).catch((e: unknown) => {
+      console.error(`[WebRTC][${peer.id}] setAnswer failed`, e)
+    })
   }
 
   setRemoteCandidate(data: IncomingCandidatePayload): void {
     const peer = this.to(data.id)
     if (peer) {
-      peer.setCandidate(data.candidate)
+      if (data.candidate) {
+        const candidate = data.candidate as RTCIceCandidateInit & {
+          type?: string
+          protocol?: string
+          address?: string
+          port?: number
+        }
+        console.log(
+          `[WebRTC][${peer.id}] remote ice candidate`,
+          candidate.type,
+          candidate.protocol,
+          candidate.address,
+          candidate.port,
+        )
+      } else {
+        console.log(`[WebRTC][${peer.id}] remote ice candidate complete`)
+      }
+      peer.setCandidate(data.candidate).catch((e: unknown) => {
+        console.error(`[WebRTC][${peer.id}] addIceCandidate failed`, data.candidate, e)
+      })
     }
   }
 
@@ -286,6 +393,7 @@ export default class RTCManager extends EventEmitter {
   onStateChange({ peer, roomid }: ConnectionStateChangePayload): void {
     const state = peer.pc.iceConnectionState
     if (state === 'connected') {
+      this.logConnectionType(peer)
       if (roomid) {
         typedSocket.emit('jion', roomid)
         return
@@ -423,6 +531,10 @@ export default class RTCManager extends EventEmitter {
     this.setStreams(this.streams.filter((it: MediaStream) => it !== stream))
   }
 
+  async logConnectionType(peer: RTC): Promise<void> {
+    await this.logIceDiagnostics(peer, 'connected')
+  }
+
   close(): void {
     typedSocket.off('candidatae')
     typedSocket.off('answer')
@@ -446,6 +558,19 @@ export default class RTCManager extends EventEmitter {
 
 class MessageManager extends EventEmitter {
   dcs: RTCDataChannelManager[] = []
+  speedTrackers = new Map<string, { startTime: number; lastBytes: number; lastTime: number }>()
+
+  formatSpeed(bytesPerSecond: number): string {
+    if (bytesPerSecond < 1024) return bytesPerSecond.toFixed(0) + ' B/s'
+    if (bytesPerSecond < 1024 * 1024) return (bytesPerSecond / 1024).toFixed(2) + ' KB/s'
+    return (bytesPerSecond / (1024 * 1024)).toFixed(2) + ' MB/s'
+  }
+
+  formatBytes(bytes: number): string {
+    if (bytes < 1024) return bytes.toFixed(0) + ' B'
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(2) + ' KB'
+    return (bytes / (1024 * 1024)).toFixed(2) + ' MB'
+  }
 
   constructor(_type?: string) {
     super()
@@ -456,6 +581,21 @@ class MessageManager extends EventEmitter {
     dc.onmessage = (e: DataChannelMessageEvent) => this.emitLocal(e.eventKey, e.data, e.desc)
     dc.onprogress = (e: DataChannelProgressEvent) => {
       e.percent = e.getBytes / e.total
+      const trackerKey = e.eventKey + ':recv'
+      let tracker = this.speedTrackers.get(trackerKey)
+      if (!tracker) {
+        tracker = { startTime: Date.now(), lastBytes: 0, lastTime: Date.now() }
+        this.speedTrackers.set(trackerKey, tracker)
+      }
+      const now = Date.now()
+      const totalElapsed = (now - tracker.startTime) / 1000
+      if (totalElapsed > 0) {
+        const avgSpeed = e.getBytes / totalElapsed
+        console.log(`[接收] 速度: ${this.formatSpeed(avgSpeed)} | 进度: ${(e.percent * 100).toFixed(1)}% | ${this.formatBytes(e.getBytes)}/${this.formatBytes(e.total)}`)
+      }
+      if (e.percent >= 1) {
+        this.speedTrackers.delete(trackerKey)
+      }
       this.emitLocal(e.eventKey + ':progress', e)
     }
     this.dcs.push(dc)
@@ -472,6 +612,8 @@ class MessageManager extends EventEmitter {
     console.log('se23nd', data)
     this.on('dc:del', delFn)
     let p: (event: DataChannelProgressEvent & { peersCount: number; completedCount: number }) => void = () => {}
+    const sendTrackerKey = key + ':send'
+    this.speedTrackers.set(sendTrackerKey, { startTime: Date.now(), lastBytes: 0, lastTime: Date.now() })
     this.dcs.forEach((dc: RTCDataChannelManager) => {
       map.set(dc, 0)
       dc.emit(
@@ -485,6 +627,19 @@ class MessageManager extends EventEmitter {
 
         if (percent === 1) {
           this.off('dc:del', delFn)
+        }
+
+        const sendTracker = this.speedTrackers.get(sendTrackerKey)
+        if (sendTracker) {
+          const now = Date.now()
+          const totalElapsed = (now - sendTracker.startTime) / 1000
+          if (totalElapsed > 0) {
+            const avgSpeed = allSendSize / totalElapsed
+            console.log(`[发送] 速度: ${this.formatSpeed(avgSpeed)} | 进度: ${(percent * 100).toFixed(1)}% | ${this.formatBytes(allSendSize)}/${this.formatBytes(e.total * map.size)}`)
+          }
+          if (percent >= 1) {
+            this.speedTrackers.delete(sendTrackerKey)
+          }
         }
 
         p({
