@@ -1,81 +1,209 @@
 <template>
-  <div :class="['web-rtc', { 'rtc-mobile': isMobileView }]">
-    <Rooms @create-room="createRoom" @call="call"></Rooms>
-    <transition name="play">
-      <div class="play" v-if="room">
-        <div class="play-room_name" v-if="isMobileView">
-          {{ room.explain.name }}
+  <div :class="['web-rtc', { 'in-room': room, 'chat-open': room && isChatOpen }]">
+    <aside class="sidebar">
+      <header class="brand">
+        <div class="brand-logo"><MessagesSquare /></div>
+        <div class="brand-text">
+          <strong>简单聊</strong>
+          <span>即建即毁的安全音视频聊天</span>
         </div>
-        <Play :streams="streams"> </Play>
-        <div
-          class="mobile-chat_entry"
-          @click="showMobileChat"
-          v-if="isMobileView && peersLength"
-        >
-          <div class="not-read" v-if="notReadMessage">{{ notReadMessage }}</div>
-          <img src="@/assets/logo.svg" />
-        </div>
-        <transition name="grow-big">
-          <div
-            class="mobile-chat-content"
-            @click.self="isShowMobileChat = false"
-            v-if="isShowMobileChat"
-          >
-            <Chat
-              :chats="chats"
-              class="mobile-chat"
-              :isMobile="true"
-              @send="send"
-            ></Chat>
-          </div>
-        </transition>
+      </header>
+      <Rooms
+        ref="roomsRef"
+        :current-room-id="room?.roomid"
+        @create-room="createRoom"
+        @call="call"
+      ></Rooms>
+      <footer class="sidebar-foot">
+        <ShieldCheck />WebRTC 点对点加密传输
+      </footer>
+    </aside>
 
-        <div class="self-btns">
-          <i
-            class="iconfont icon-mic"
-            :class="{ active: slefVideoBtnStatus.audio }"
-            @click="selfMediaStatusChange('audio')"
-          ></i>
-          <i
-            class="iconfont icon-video"
-            :class="{ active: slefVideoBtnStatus.video }"
-            @click="selfMediaStatusChange('video')"
-          ></i>
-          <i
-            class="iconfont icon-desktopshare"
-            :class="{ active: slefVideoBtnStatus.desktopShare }"
-            @click="selfMediaStatusChange('desktopShare')"
-          ></i>
-          <i
-            class="iconfont icon-camera-switch"
-            :class="{ active: slefVideoBtnStatus.cameraSwitch }"
-            @click="selfMediaStatusChange('cameraSwitch')"
-          ></i>
+    <main class="stage">
+      <transition name="room-view">
+        <div class="room-view" v-if="room">
+          <header class="stage-bar">
+            <div class="room-meta">
+              <h1 class="room-title">
+                <span class="live-dot"></span>
+                <span class="room-title-text">{{ roomName }}</span>
+              </h1>
+              <p class="room-desc" v-if="room.explain.tips">{{ room.explain.tips }}</p>
+            </div>
+            <span class="pill"><Users />{{ peersLength + 1 }} 人</span>
+          </header>
+
+          <Play class="stage-media" :streams="streams">
+            <template #empty>
+              <div class="stage-empty">
+                <div class="stage-empty-orb">
+                  <VideoOff v-if="peersLength" />
+                  <Users v-else />
+                </div>
+                <h2>{{ peersLength ? "还没有人开启画面" : "等待其他人加入" }}</h2>
+                <p v-if="peersLength">打开摄像头或共享屏幕，开始视频通话</p>
+                <p v-else>让好友在房间列表里找到「{{ roomName }}」即可加入</p>
+              </div>
+            </template>
+          </Play>
+
+          <footer class="controls">
+            <div class="controls-bar">
+              <button
+                type="button"
+                class="ctrl"
+                :class="{ on: slefVideoBtnStatus.audio }"
+                :disabled="pendingMedia === 'audio'"
+                :aria-pressed="slefVideoBtnStatus.audio"
+                :data-tip="slefVideoBtnStatus.audio ? '关闭麦克风' : '开启麦克风'"
+                :aria-label="slefVideoBtnStatus.audio ? '关闭麦克风' : '开启麦克风'"
+                @click="selfMediaStatusChange('audio')"
+              >
+                <Mic v-if="slefVideoBtnStatus.audio" />
+                <MicOff v-else />
+              </button>
+              <button
+                type="button"
+                class="ctrl"
+                :class="{ on: slefVideoBtnStatus.video }"
+                :disabled="pendingMedia === 'video'"
+                :aria-pressed="slefVideoBtnStatus.video"
+                :data-tip="slefVideoBtnStatus.video ? '关闭摄像头' : '开启摄像头'"
+                :aria-label="slefVideoBtnStatus.video ? '关闭摄像头' : '开启摄像头'"
+                @click="selfMediaStatusChange('video')"
+              >
+                <VideoIcon v-if="slefVideoBtnStatus.video" />
+                <VideoOff v-else />
+              </button>
+              <button
+                v-if="canShareScreen"
+                type="button"
+                class="ctrl"
+                :class="{ on: slefVideoBtnStatus.desktopShare }"
+                :disabled="pendingMedia === 'desktopShare'"
+                :aria-pressed="slefVideoBtnStatus.desktopShare"
+                :data-tip="slefVideoBtnStatus.desktopShare ? '停止共享' : '共享屏幕'"
+                :aria-label="slefVideoBtnStatus.desktopShare ? '停止共享' : '共享屏幕'"
+                @click="selfMediaStatusChange('desktopShare')"
+              >
+                <MonitorUp />
+              </button>
+              <button
+                v-if="isMobileView"
+                type="button"
+                class="ctrl"
+                :class="{ on: slefVideoBtnStatus.cameraSwitch }"
+                :aria-pressed="slefVideoBtnStatus.cameraSwitch"
+                aria-label="切换摄像头"
+                @click="selfMediaStatusChange('cameraSwitch')"
+              >
+                <SwitchCamera />
+              </button>
+              <span class="ctrl-divider"></span>
+              <button
+                type="button"
+                class="ctrl"
+                :class="{ on: isChatOpen }"
+                :aria-pressed="isChatOpen"
+                :data-tip="isChatOpen ? '收起聊天' : '打开聊天'"
+                :aria-label="isChatOpen ? '收起聊天' : '打开聊天'"
+                @click="isChatOpen = !isChatOpen"
+              >
+                <MessageSquareText />
+                <span class="ctrl-badge" v-if="notReadMessage">
+                  {{ notReadMessage > 99 ? "99+" : notReadMessage }}
+                </span>
+              </button>
+              <button
+                type="button"
+                class="ctrl ctrl-leave"
+                data-tip="离开房间"
+                aria-label="离开房间"
+                @click="leaveRoom"
+              >
+                <PhoneOff />
+              </button>
+            </div>
+          </footer>
         </div>
-      </div>
-    </transition>
-    <Chat
-      :chats="chats"
-      v-if="peersLength && !isMobileView"
-      :isMobile="isMobileView"
-      @send="send"
-    ></Chat>
+
+        <section class="welcome" v-else>
+          <div class="welcome-hero">
+            <div class="welcome-orb"><VideoIcon /></div>
+            <h1>简单聊，让聊天更简单</h1>
+            <p>
+              无需注册，新建一个房间就能和好友视频通话、共享屏幕、互传文件。
+            </p>
+            <button type="button" class="btn btn-primary btn-lg" @click="roomsRef?.openCreate()">
+              <Plus />新建房间
+            </button>
+          </div>
+          <ul class="welcome-features">
+            <li>
+              <ShieldCheck />
+              <div>
+                <strong>加密直连</strong>
+                <span>音视频与文件点对点传输</span>
+              </div>
+            </li>
+            <li>
+              <Zap />
+              <div>
+                <strong>即建即毁</strong>
+                <span>成员全部离开后房间自动销毁</span>
+              </div>
+            </li>
+            <li>
+              <MonitorUp />
+              <div>
+                <strong>屏幕共享</strong>
+                <span>一键共享桌面或窗口</span>
+              </div>
+            </li>
+          </ul>
+        </section>
+      </transition>
+    </main>
+
+    <div class="chat-dock" :class="{ open: isChatOpen }" :inert="!isChatOpen" v-if="room">
+      <div class="chat-backdrop" @click="isChatOpen = false"></div>
+      <Chat
+        class="chat-panel"
+        :chats="chats"
+        :isMobile="isMobileView"
+        :disabled="!peersLength"
+        @send="send"
+        @close="isChatOpen = false"
+      ></Chat>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, reactive, ref } from "vue";
+import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
+import {
+  MessageSquareText,
+  MessagesSquare,
+  Mic,
+  MicOff,
+  MonitorUp,
+  PhoneOff,
+  Plus,
+  ShieldCheck,
+  SwitchCamera,
+  Users,
+  Video as VideoIcon,
+  VideoOff,
+  Zap,
+} from "@lucide/vue";
 import Rooms from "@/views/rooms.vue";
 import RTCManager from "@/views/rtc-manager";
 import Chat from "@/views/chat/index.vue";
-import { isMobile, fileLoad } from "@/tools";
+import { isMobile } from "@/tools";
 import Play from "@/views/play.vue";
 import socket from "@/socket";
 
-type StreamKind = "audio" | "video";
-
 interface StreamWithType extends MediaStream {
-  type?: StreamKind;
   isSelf?: boolean;
 }
 
@@ -178,54 +306,109 @@ declare global {
   }
 }
 
-const rtcManager = new RTCManager() as RTCManagerLike;
+type MediaKey = "audio" | "video" | "desktopShare" | "cameraSwitch";
+
+const rtcManager = new RTCManager() as unknown as RTCManagerLike;
 
 window.rtcManager = rtcManager;
 
 const streams = ref<StreamWithType[]>([]);
 const chats = ref<ChatMessage[]>([]);
 const peersLength = ref(0);
-const slefVideoBtnStatus = reactive({
+const slefVideoBtnStatus = reactive<Record<MediaKey, boolean>>({
   audio: false,
   desktopShare: false,
   video: false,
   cameraSwitch: false,
 });
 const room = ref<RoomPayload | null>(null);
-const isShowMobileChat = ref(false);
+const roomsRef = ref<InstanceType<typeof Rooms> | null>(null);
+const isChatOpen = ref(false);
 const notReadMessage = ref(0);
+const pendingMedia = ref<MediaKey | null>(null);
 const isMobileView = computed(() => isMobile);
+const isWide = useMediaQuery("(min-width: 1200px)");
+const roomName = computed(() => room.value?.explain.name || "未命名房间");
+// 手机浏览器基本不支持 getDisplayMedia，直接隐藏入口
+const canShareScreen = Boolean(navigator.mediaDevices?.getDisplayMedia);
+
+function useMediaQuery(query: string) {
+  const mql = window.matchMedia(query);
+  const matches = ref(mql.matches);
+  const update = (event: MediaQueryListEvent) => {
+    matches.value = event.matches;
+  };
+  mql.addEventListener("change", update);
+  onBeforeUnmount(() => mql.removeEventListener("change", update));
+  return matches;
+}
+
+watch(isChatOpen, (open) => {
+  if (open) notReadMessage.value = 0;
+});
 
 function addChatMessage(msg: ChatMessage) {
   chats.value.push(msg);
-  notReadMessage.value += 1;
+  if (!isChatOpen.value && !msg.isSelf) notReadMessage.value += 1;
 }
 
-function showMobileChat() {
-  notReadMessage.value = 0;
-  isShowMobileChat.value = true;
+async function selfMediaStatusChange(type: MediaKey) {
+  if (pendingMedia.value) return;
+  pendingMedia.value = type;
+  try {
+    await rtcManager.setSelfMediaStatus({
+      ...slefVideoBtnStatus,
+      [type]: !slefVideoBtnStatus[type],
+    });
+    slefVideoBtnStatus[type] = !slefVideoBtnStatus[type];
+  } finally {
+    pendingMedia.value = null;
+  }
 }
 
-async function selfMediaStatusChange(type: keyof typeof slefVideoBtnStatus) {
-  await rtcManager.setSelfMediaStatus({
-    ...slefVideoBtnStatus,
-    [type]: !slefVideoBtnStatus[type],
-  });
-  slefVideoBtnStatus[type] = !slefVideoBtnStatus[type];
-}
-
-function createRoom(data: RoomPayload) {
-  chats.value = [];
+// 断开所有连接并关闭本地音视频，按钮状态一并复位
+function resetConnection() {
   rtcManager.clear();
-  rtcManager.createRoom(data);
+  void rtcManager.setSelfMediaStatus({
+    audio: false,
+    video: false,
+    desktopShare: false,
+  });
+  Object.assign(slefVideoBtnStatus, {
+    audio: false,
+    video: false,
+    desktopShare: false,
+    cameraSwitch: false,
+  });
+}
+
+function enterRoom(data: RoomPayload) {
+  chats.value = [];
+  notReadMessage.value = 0;
+  isChatOpen.value = isWide.value;
   room.value = data;
 }
 
+function createRoom(data: RoomPayload) {
+  resetConnection();
+  rtcManager.createRoom(data);
+  enterRoom(data);
+}
+
 function call({ roomid, roomInfo }: { roomid: string; roomInfo: RoomPayload }) {
-  chats.value = [];
-  rtcManager.clear();
+  resetConnection();
   rtcManager.call({ roomid, socketIds: roomInfo.socketIds ?? [] });
-  room.value = roomInfo;
+  enterRoom(roomInfo);
+}
+
+function leaveRoom() {
+  if (!room.value) return;
+  socket.emit("leave", room.value.roomid);
+  resetConnection();
+  room.value = null;
+  chats.value = [];
+  isChatOpen.value = false;
+  notReadMessage.value = 0;
 }
 
 function sendTexts(texts: string[]) {
@@ -244,17 +427,20 @@ function sendTexts(texts: string[]) {
 function sendFiles(files: SendFilePayload[]) {
   files.forEach((item) => {
     const { file, ...data } = item;
-    const chatMsg: ChatMessage = {
+    // reactive：进度回调直接改这个对象，界面才能跟着刷新
+    const chatMsg = reactive<ChatMessage>({
       ...data,
       isSelf: true,
       percent: 0,
       total: 0,
       sendSize: 0,
-    };
+    });
 
     if (item.type === "video" || item.type === "img") {
       void getMedia(file, chatMsg);
     } else {
+      // File 是对磁盘文件的引用，挂在消息上不占内存，发送端也能点击保存
+      chatMsg.file = file;
       addChatMessage(chatMsg);
     }
 
@@ -287,7 +473,13 @@ function send(payload: SendPayload) {
 }
 
 function getFile(data: Blob, desc: ChatMessage) {
-  fileLoad({ data, name: desc.fileName });
+  // 收完的 Blob 留在消息上，由用户点击文件卡片手动保存
+  let chat = chats.value.find((item) => item.hash === desc.hash);
+  if (!chat) {
+    chat = { ...desc, percent: 1 };
+    addChatMessage(chat);
+  }
+  chat.file = data;
 }
 
 function getChatText(chat: ChatMessage) {
@@ -333,180 +525,639 @@ onBeforeUnmount(() => {
 </script>
 
 <style lang="scss">
-video {
-  outline: none;
+/* ---------- App shell ---------- */
+.web-rtc {
+  --sidebar-w: 300px;
+  --chat-w: 360px;
+  --gap: 12px;
+  display: grid;
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr) 0px;
+  height: 100dvh;
+  padding: var(--gap);
+  transition: grid-template-columns 0.45s var(--ease);
+
+  &.chat-open {
+    grid-template-columns: var(--sidebar-w) minmax(0, 1fr) calc(var(--chat-w) + var(--gap));
+  }
 }
-.web-rtc.rtc-mobile {
-  grid-template-columns: 1fr;
-  padding: 20px;
-  .rooms {
-    height: 100%;
+
+.sidebar,
+.chat-panel {
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+
+/* ---------- Sidebar ---------- */
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  min-height: 0;
+  padding: 20px 16px 16px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 4px;
+}
+
+.brand-logo {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  flex: none;
+  border-radius: 13px;
+  color: var(--accent);
+  background: var(--bg-elevated);
+  box-shadow: inset 0 1px 0 var(--border-strong);
+
+  svg {
+    width: 22px;
+    height: 22px;
+  }
+}
+
+.brand-text {
+  min-width: 0;
+
+  strong {
+    display: block;
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
   }
 
-  .mobile-chat_entry {
-    position: absolute;
-    bottom: 50vw;
-    width: 40px;
-    height: 40px;
-    right: 20px;
-    img {
-      width: 100%;
-    }
+  span {
+    display: block;
+    font-size: 12px;
+    color: var(--text-3);
   }
-  .not-read {
-    position: absolute;
-    $w: 20px;
-    padding: 0 $w/4;
-    height: $w;
-    border-radius: calc($w/2);
-    // border: 1px solid #a3d4ff;
-    background: red;
-    text-align: center;
-    line-height: $w;
-    right: -$w/3;
-    top: -$w/3;
-    color: #fff;
+}
+
+.sidebar-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px;
+  font-size: 12px;
+  color: var(--text-3);
+
+  svg {
+    width: 14px;
+    height: 14px;
+    color: var(--success);
   }
-  .mobile-chat-content {
-    position: absolute;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    top: 0;
+}
+
+/* ---------- Stage ---------- */
+.stage {
+  container: stage / inline-size;
+  position: relative;
+  min-width: 0;
+  margin-left: var(--gap);
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--border);
+  background: var(--bg-stage);
+  overflow: hidden;
+}
+
+.room-view,
+.welcome {
+  position: absolute;
+  inset: 0;
+}
+
+.room-view {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+}
+
+.room-view-enter-active,
+.room-view-leave-active {
+  transition:
+    opacity 0.35s var(--ease),
+    transform 0.35s var(--ease);
+}
+
+.room-view-enter-from,
+.room-view-leave-to {
+  opacity: 0;
+  transform: scale(0.985);
+}
+
+.stage-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex: none;
+  padding: 2px 4px;
+}
+
+.room-meta {
+  min-width: 0;
+}
+
+.room-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 17px;
+  font-weight: 650;
+}
+
+.room-title-text,
+.room-desc {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.room-desc {
+  margin: 2px 0 0 18px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.live-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--success);
+  animation: live-ring 2s infinite;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 5px 12px;
+  border-radius: 99px;
+  border: 1px solid var(--border);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+  background: var(--surface);
+
+  svg {
+    width: 14px;
+    height: 14px;
   }
-  .mobile-chat {
-    position: absolute;
-    bottom: 20vh;
-    top: 20vh;
-    left: 30px;
-    right: 0;
-    background: #fff;
-    z-index: 3;
-    box-shadow: 0 0px 6px 0px #a3d4ff;
-    .content {
-      border: none;
-      background: #fff;
-      border-bottom: 1px solid #efefeb;
-    }
-    .edit-content {
-      border: none;
-    }
-  }
-  .mobile-chat-content {
-    transition: all 0.3s;
-    transform-origin: calc(100vw - 40px) calc(100vh - 54vw);
-  }
-  .grow-big-enter {
-    transform: scale(0);
-  }
-  .grow-big-enter-to {
-    transform: scale(1);
-  }
-  .grow-big-leave {
-    transform: scale(1);
-  }
-  .grow-big-leave-to {
-    transform: scale(0);
+}
+
+.stage-media {
+  flex: 1;
+}
+
+.stage-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  max-width: 360px;
+  text-align: center;
+
+  h2 {
+    font-size: 18px;
+    font-weight: 650;
   }
 
-  // .chat {
-  // 	position: fixed;
-  // 	top: 0;
-  // 	right: 0;
-  // 	left: 0;
-  // 	bottom: 0;
-  // 	background: #fff;
-  // 	display: flex;
-  // 	flex-direction: column;
-  // 	padding: 20px;
-  // 	transition: all 0.3s;
+  p {
+    font-size: 13px;
+    color: var(--text-2);
+  }
+}
 
-  // 	nav {
-  // 		display: flex;
-  // 		justify-content: flex-end;
-  // 		margin-bottom: 10px;
-  // 	}
-  // 	.content {
-  // 		min-height: 200px;
-  // 		height: auto;
-  // 		flex: 3 1 200px;
-  // 	}
-  // 	.edit-content {
-  // 		flex: 1;
-  // 	}
-  // }
-  .play-enter,
-  .play-leave-to {
+.stage-empty-orb {
+  display: grid;
+  place-items: center;
+  width: 88px;
+  height: 88px;
+  margin-bottom: 16px;
+  border-radius: 50%;
+  color: var(--text-2);
+  background: var(--bg-elevated);
+  box-shadow: inset 0 0 0 1px var(--border);
+
+  svg {
+    width: 34px;
+    height: 34px;
+  }
+}
+
+/* ---------- Controls ---------- */
+.controls {
+  display: flex;
+  justify-content: center;
+  flex: none;
+}
+
+.controls-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border-radius: 99px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow);
+}
+
+.ctrl {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  flex: none;
+  border-radius: 50%;
+  color: var(--text);
+  background: var(--surface-hover);
+  transition:
+    background-color 0.2s,
+    color 0.2s,
+    transform 0.15s var(--ease);
+
+  svg {
+    width: 21px;
+    height: 21px;
+  }
+
+  &:hover:not(:disabled) {
+    background: var(--surface-active);
+  }
+
+  &:active:not(:disabled) {
+    transform: scale(0.92);
+  }
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: progress;
+  }
+
+  &.on {
+    color: var(--bg);
+    background: var(--text);
+
+    &:hover:not(:disabled) {
+      background: #f3f4f0;
+    }
+  }
+}
+
+.ctrl-leave {
+  width: 64px;
+  border-radius: 99px;
+  color: #fff;
+  background: var(--danger);
+
+  &:hover:not(:disabled) {
+    background: var(--danger-hover);
+  }
+}
+
+.ctrl-divider {
+  width: 1px;
+  height: 24px;
+  margin: 0 2px;
+  background: var(--border-strong);
+}
+
+.ctrl-badge {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  min-width: 19px;
+  height: 19px;
+  padding: 0 5px;
+  border-radius: 99px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 19px;
+  text-align: center;
+  color: #fff;
+  background: var(--danger);
+  box-shadow: 0 0 0 2px var(--bg-stage);
+}
+
+@media (hover: hover) {
+  .ctrl[data-tip]::after {
+    content: attr(data-tip);
+    position: absolute;
+    bottom: calc(100% + 12px);
+    left: 50%;
+    padding: 5px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+    color: var(--text);
+    background: var(--bg-elevated);
+    opacity: 0;
+    translate: -50% 4px;
+    pointer-events: none;
+    transition:
+      opacity 0.15s,
+      translate 0.15s var(--ease);
+  }
+
+  .ctrl[data-tip]:hover::after {
+    opacity: 1;
+    translate: -50% 0;
+  }
+}
+
+/* ---------- Welcome ---------- */
+.welcome {
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 48px;
+  padding: 40px 32px;
+  overflow-y: auto;
+  text-align: center;
+
+  h1 {
+    font-size: clamp(26px, 4.2cqi, 40px);
+    text-wrap: balance;
+    font-weight: 750;
+    line-height: 1.2;
+    letter-spacing: -0.01em;
+    color: var(--text);
+  }
+
+  p {
+    max-width: 440px;
+    margin: 14px auto 28px;
+    text-wrap: balance;
+    font-size: 15px;
+    color: var(--text-2);
+  }
+}
+
+.welcome-hero {
+  position: relative;
+  isolation: isolate;
+}
+
+.welcome-orb {
+  display: grid;
+  place-items: center;
+  width: 76px;
+  height: 76px;
+  margin: 0 auto 28px;
+  border-radius: 24px;
+  color: var(--text-2);
+  background: var(--bg-elevated);
+  box-shadow: inset 0 0 0 1px var(--border);
+  animation: float 6s ease-in-out infinite;
+
+  svg {
+    width: 34px;
+    height: 34px;
+  }
+}
+
+.welcome-features {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  width: min(760px, 100%);
+
+  li {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 16px;
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border);
+    text-align: left;
+    background: var(--surface);
+  }
+
+  svg {
+    width: 20px;
+    height: 20px;
+    flex: none;
+    margin-top: 1px;
+    color: var(--text-2);
+  }
+
+  strong {
+    display: block;
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  span {
+    font-size: 12px;
+    color: var(--text-3);
+  }
+
+  @container stage (max-width: 720px) {
+    grid-template-columns: minmax(0, 1fr);
+    width: min(360px, 100%);
+  }
+}
+
+/* ---------- Chat dock ---------- */
+.chat-dock {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.chat-backdrop {
+  display: none;
+}
+
+.chat-panel {
+  width: var(--chat-w);
+  height: 100%;
+  margin-left: var(--gap);
+  overflow: hidden;
+}
+
+/* ---------- ≤1199px：聊天改为右侧浮层 ---------- */
+@media (max-width: 1199px) {
+  .web-rtc {
+    --sidebar-w: 268px;
+
+    &,
+    &.chat-open {
+      grid-template-columns: var(--sidebar-w) minmax(0, 1fr) 0px;
+    }
+  }
+
+  .chat-dock {
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    overflow: visible;
+    pointer-events: none;
+
+    &.open {
+      pointer-events: auto;
+    }
+  }
+
+  .chat-backdrop {
+    display: block;
+    position: absolute;
+    inset: 0;
+    background: rgb(0 0 0 / 0.55);
+    opacity: 0;
+    transition: opacity 0.35s;
+
+    .open > & {
+      opacity: 1;
+    }
+  }
+
+  .chat-panel {
+    position: absolute;
+    top: var(--gap);
+    right: var(--gap);
+    bottom: var(--gap);
+    width: min(var(--chat-w), calc(100% - var(--gap) * 2));
+    height: auto;
+    margin: 0;
+    background: var(--bg-elevated);
+    box-shadow: var(--shadow);
+    transform: translateX(calc(100% + var(--gap) * 2));
+    transition: transform 0.45s var(--ease);
+
+    .open > & {
+      transform: none;
+    }
+  }
+}
+
+/* ---------- ≤767px：手机 ---------- */
+@media (max-width: 767px) {
+  .web-rtc {
+    display: block;
+    padding: 0;
+  }
+
+  .sidebar {
+    height: 100dvh;
+    gap: 22px;
+    padding: calc(var(--safe-top) + 24px) calc(var(--safe-right) + 16px)
+      calc(var(--safe-bottom) + 16px) calc(var(--safe-left) + 16px);
+    border: none;
+    border-radius: 0;
+    background: none;
+  }
+
+  .brand-logo {
+    width: 46px;
+    height: 46px;
+  }
+
+  .brand-text strong {
+    font-size: 20px;
+  }
+
+  .stage {
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+    margin: 0;
+    border: none;
+    border-radius: 0;
+    background: none;
+    pointer-events: none;
+  }
+
+  .welcome {
+    display: none;
+  }
+
+  .room-view {
+    gap: 10px;
+    padding: calc(var(--safe-top) + 10px) calc(var(--safe-right) + 10px)
+      calc(var(--safe-bottom) + 12px) calc(var(--safe-left) + 10px);
+    background: var(--bg-stage);
+    pointer-events: auto;
+  }
+
+  .room-view-enter-from,
+  .room-view-leave-to {
+    opacity: 1;
     transform: translateX(100%);
   }
-  .play-enter-to,
-  .play-leave {
-    transform: translateX(0);
+
+  .stage-bar {
+    padding: 4px 6px;
   }
-  div.play {
-    position: fixed;
-    top: 0;
-    bottom: 0;
+
+  .controls-bar {
+    gap: 6px;
+    padding: 6px;
+  }
+
+  // 按视口宽度缩放，保证 360px 宽的小屏也能放下一排
+  .ctrl {
+    width: min(50px, 12.5vw);
+    height: min(50px, 12.5vw);
+  }
+
+  .ctrl-leave {
+    width: min(62px, 15vw);
+  }
+
+  .chat-panel {
+    top: auto;
     left: 0;
     right: 0;
-    background: #fff;
-    transition: all 0.3s;
-    padding: 40px 0;
+    bottom: 0;
+    width: 100%;
+    height: min(82dvh, 720px);
+    padding-bottom: var(--safe-bottom);
+    border-radius: 24px 24px 0 0;
+    border-bottom: none;
+    transform: translateY(100%);
 
-    .back {
-      margin-bottom: 10px;
-      color: #666;
-    }
-  }
-}
-.play-room_name {
-  position: absolute;
-  top: 5px;
-  text-align: center;
-  left: 0;
-  right: 0;
-  font-size: 24px;
-}
-.web-rtc {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 40px;
-  display: grid;
-  grid-template-columns: 200px 4fr 400px;
-  grid-gap: 0 10px;
-
-  .play {
-    display: flex;
-    flex-wrap: wrap;
-    align-content: flex-start;
-    min-width: 100px;
-    border: 1px solid #ccc;
-    position: relative;
-    .self-btns {
+    // 顶部把手，提示这是一个抽屉
+    &::before {
+      content: "";
       position: absolute;
-      bottom: 0;
-      width: 100%;
-      height: 36px;
-      display: flex;
-      justify-content: space-around;
-      align-items: center;
-      & > i {
-        font-size: 26px;
-        color: #666;
-        &.active {
-          color: #47b384;
-        }
-      }
-    }
-    nav {
-      display: flex;
-      justify-content: space-between;
-      width: 100%;
+      top: 6px;
+      left: 50%;
+      width: 36px;
+      height: 4px;
+      border-radius: 4px;
+      background: var(--border-strong);
+      translate: -50% 0;
     }
   }
+}
 
-  .rtc-room {
-    height: calc(100vh - 90px);
+@keyframes live-ring {
+  0% {
+    box-shadow: 0 0 0 0 rgb(111 175 126 / 0.6);
+  }
+  70%,
+  100% {
+    box-shadow: 0 0 0 7px rgb(111 175 126 / 0);
+  }
+}
+
+@keyframes float {
+  50% {
+    transform: translateY(-6px);
   }
 }
 </style>

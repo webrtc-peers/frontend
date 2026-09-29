@@ -1,6 +1,24 @@
 import { parseHeader, reader } from '../tool'
 import type { ProgressHeader, UnpackedMessage } from '../tool'
 
+// 连续分片攒到这个大小就合成一个 Blob：Blob 数据由浏览器托管，不占 JS 堆，Chrome 超出内存配额还会落盘
+const FLUSH_SIZE = 8 * 1024 * 1024
+
+function flushChunks(message: UnpackedMessage, force = false): void {
+  let end = message.flushedChunks
+  let size = 0
+  while (end < message.totalChunks && message.chunks[end]) {
+    size += message.chunks[end]!.byteLength
+    end++
+  }
+  if (end === message.flushedChunks || (!force && size < FLUSH_SIZE)) {
+    return
+  }
+  message.parts.push(new Blob(message.chunks.slice(message.flushedChunks, end) as ArrayBuffer[]))
+  message.chunks.fill(undefined, message.flushedChunks, end)
+  message.flushedChunks = end
+}
+
 export default class Unpacker {
   messages = new Map<string, UnpackedMessage>()
   onprogress: (eventKey: string, buffer: Uint8Array, header: ProgressHeader) => void = () => {}
@@ -23,6 +41,8 @@ export default class Unpacker {
         getBytes: 0,
         receivedChunks: 0,
         chunks: new Array(totalChunks),
+        parts: [],
+        flushedChunks: 0,
       }
       this.messages.set(messageId, message)
     } else if (desc !== undefined && message.desc === undefined) {
@@ -31,13 +51,15 @@ export default class Unpacker {
     if (chunkIndex >= totalChunks) {
       return
     }
-    if (!message.chunks[chunkIndex]) {
+    // flushedChunks 之前的分片已经合并进 parts，重复到达的直接忽略
+    if (chunkIndex >= message.flushedChunks && !message.chunks[chunkIndex]) {
       message.chunks[chunkIndex] = leftbuffer.buffer.slice(
         leftbuffer.byteOffset,
         leftbuffer.byteOffset + leftbuffer.byteLength,
       ) as ArrayBuffer
       message.receivedChunks += 1
       message.getBytes += leftbuffer.byteLength
+      flushChunks(message)
     }
     this.onprogress(eventKey, leftbuffer, {
       messageId,
@@ -53,7 +75,8 @@ export default class Unpacker {
     })
 
     if (message.receivedChunks === totalChunks && message.getBytes === total) {
-      const blob = new Blob(message.chunks)
+      flushChunks(message, true)
+      const blob = new Blob(message.parts)
       this.messages.delete(messageId)
 
       let data: unknown

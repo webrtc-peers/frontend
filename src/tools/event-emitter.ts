@@ -1,4 +1,5 @@
-type EventHandler = (...data: unknown[]) => unknown
+// 参数用 any：带具体参数类型的回调才能赋给它（unknown[] 在严格模式下会因参数逆变报错）
+type EventHandler = (...data: any[]) => unknown
 
 export class EventEmitter {
   events: Record<string, EventHandler[] | null> = {}

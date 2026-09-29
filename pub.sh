@@ -7,7 +7,7 @@
 # fi
 
 echo '2、打包'
-npm run build
+pnpm run build
 
 message="cd /root/webroot/webrtc-peers/frontend && rm -rf *"
 

@@ -44,10 +44,14 @@ export interface UnpackedMessage<TDesc = unknown> {
   desc?: TDesc
   getBytes: number
   receivedChunks: number
-  chunks: ArrayBuffer[]
+  chunks: Array<ArrayBuffer | undefined>
+  // 已合并成 Blob 的分片，[0, flushedChunks) 都在 parts 里
+  parts: Blob[]
+  flushedChunks: number
 }
 
-type EventHandler = (...data: unknown[]) => unknown
+// 参数用 any：带具体参数类型的回调才能赋给它（unknown[] 在严格模式下会因参数逆变报错）
+type EventHandler = (...data: any[]) => unknown
 type EventMapConstraint<TEvents> = {
   [K in keyof TEvents]: EventHandler
 }
@@ -74,13 +78,6 @@ const toUint8Array = (buffer: ArrayBuffer | ArrayBufferView): Uint8Array => {
   return new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength)
 }
 
-const toArrayBuffer = (buffer: ArrayBuffer | ArrayBufferView): ArrayBuffer => {
-  if (buffer instanceof ArrayBuffer) {
-    return buffer
-  }
-  return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer
-}
-
 export const randomStr = function (len = 32): string {
   const $chars = 'ABCDEFGHJKMNPQRSTWXYZabcdefhijkmnprstwxyz234567890_'
   const maxPos = $chars.length
@@ -90,16 +87,6 @@ export const randomStr = function (len = 32): string {
   }
   return str
 }
-
-export const types = {
-  Arraybuffer: 1,
-  Blob: 2,
-  undefined: 3,
-  null: 4,
-  Object: 5,
-  Array: 6,
-  Number: 7,
-} as const
 
 export const getType = function (val: unknown): TransferDataType {
   if (
@@ -115,7 +102,7 @@ export const getType = function (val: unknown): TransferDataType {
   return toString.call(val).slice(8, -1)
 }
 
-export const setHeader = function <TDesc = unknown>(header: MessageHeader<TDesc>): Uint8Array {
+export const setHeader = function <TDesc = unknown>(header: MessageHeader<TDesc>): Uint8Array<ArrayBuffer> {
   const s = JSON.stringify(header)
   const buffer = encode(s)
   return encode(`${buffer.byteLength},${s}`)
@@ -159,29 +146,6 @@ export const parseHeader = function <TDesc = unknown>(
   }
 }
 
-export const mergeBuffer = function (...datas: Array<ArrayBuffer | ArrayBufferView>): Uint8Array {
-  let len = 0
-  for (const it of datas) {
-    if (getType(it) !== 'ArrayBuffer') {
-      throw new Error('mergebuffer args must be buffer')
-    }
-    len += it.byteLength
-  }
-  const result = new Uint8Array(len)
-  let offset = 0
-  for (let it of datas) {
-    const chunk = toUint8Array(it)
-    result.set(chunk, offset)
-    offset += chunk.byteLength
-  }
-  return result
-}
-
-export const isBuffer = function (data: unknown): data is Blob | ArrayBuffer | File {
-  const t = getType(data)
-  return ['Blob', 'ArrayBuffer', 'File'].includes(t)
-}
-
 export function toBlob(data: unknown): Blob {
   const type = getType(data)
   if (type === 'ArrayBuffer' || type === 'File') {
@@ -191,11 +155,6 @@ export function toBlob(data: unknown): Blob {
     return data as Blob
   }
   return new Blob([JSON.stringify(data)])
-}
-
-export async function BlobtoData(blob: Blob): Promise<void> {
-  const arrStr = await reader.readAsText(blob)
-  void arrStr
 }
 
 const isFileReaderMethod = (property: PropertyKey): property is FileReaderReadMethod =>

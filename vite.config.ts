@@ -6,10 +6,8 @@ export default defineConfig(() => ({
   plugins: [vue()],
   resolve: {
     alias: {
-      '@': path.resolve(__dirname, 'src'),
-      assets: path.resolve(__dirname, 'src/assets'),
+      '@': path.resolve(import.meta.dirname, 'src'),
     },
-    extensions: ['.mjs', '.js', '.ts', '.jsx', '.tsx', '.json', '.vue'],
   },
   build: {
     target: 'esnext',

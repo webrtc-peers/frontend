@@ -1,16 +1,8 @@
 import RTC, { type RTCDataChannelManager } from './rtc'
 import socket from '@/socket'
-import { EventEmitter, randomStr, findDiff } from '@/tools'
-import { iceConfig, type RTCIceConfigurationExt } from '@/tools/ice-config'
-
-void findDiff
-
-type SocketLike = {
-  id?: string
-  emit: (event: string, ...args: any[]) => void
-  on: (event: string, listener: (...args: any[]) => void) => void
-  off: (event: string, listener?: (...args: any[]) => void) => void
-}
+import { EventEmitter, randomStr } from '@/tools'
+import { iceConfig } from '@/tools/ice-config'
+import type { MessageMeta } from '@/plugins/webrtc-chat/tool'
 
 type LocalMediaType = 'video' | 'audio' | 'desktopShare'
 
@@ -89,16 +81,11 @@ interface DataChannelProgressEvent {
   percent?: number
 }
 
-declare global {
-  interface Window {
-    socket: SocketLike
-    peer?: RTC
-  }
+type SendProgressEvent = MessageMeta & {
+  percent: number
+  peersCount: number
+  completedCount: number
 }
-
-const typedSocket = socket as SocketLike
-
-window.socket = typedSocket
 
 export default class RTCManager extends EventEmitter {
   peers: RTC[] = []
@@ -114,13 +101,14 @@ export default class RTCManager extends EventEmitter {
 
   constructor() {
     super()
-    typedSocket.on('offer', (data: IncomingOfferPayload) => this.onOffer(data))
-    typedSocket.on('answer', (data: IncomingAnswerPayload) => this.setAnswer(data))
-    typedSocket.on('candidate', (data: IncomingCandidatePayload) => this.setRemoteCandidate(data))
-    this.dcFile = new MessageManager('file')
-    this.dcData = new MessageManager('data')
+    socket.on('offer', (data: IncomingOfferPayload) => this.onOffer(data))
+    socket.on('answer', (data: IncomingAnswerPayload) => this.setAnswer(data))
+    socket.on('candidate', (data: IncomingCandidatePayload) => this.setRemoteCandidate(data))
+    this.dcFile = new MessageManager()
+    this.dcData = new MessageManager()
     this.on('peer:del', (peer: RTC) => {
       this.peers = this.peers.filter((it: RTC) => it !== peer)
+      this.emitLocal('peers:change', this.peers)
 
       this.removeStreams(peer.pc.getRemoteStreams())
       peer.dcs &&
@@ -132,15 +120,15 @@ export default class RTCManager extends EventEmitter {
   }
 
   async createRoom(data: RoomData): Promise<void> {
-    typedSocket.emit('leave', this.roomid)
-    typedSocket.emit('create-room', data)
+    socket.emit('leave', this.roomid)
+    socket.emit('create-room', data)
     this.roomid = data.roomid
   }
 
   negotiationneeded(peer: RTC): void {
     peer.createOffer().then((offer: RTCSessionDescriptionInit) => {
-      typedSocket.emit('offer', {
-        from: typedSocket.id,
+      socket.emit('offer', {
+        from: socket.id,
         to: peer.toSocketId,
         id: peer.id,
         offer,
@@ -268,11 +256,9 @@ export default class RTCManager extends EventEmitter {
   }
 
   createPeer({ toSocketId, id, roomid }: PeerConfig): RTC {
-    const peer = new RTC({ config: iceConfig })
-    peer.id = id
-    peer.toSocketId = toSocketId
+    const peer = new RTC({ id, toSocketId, config: iceConfig })
 
-    const chat = peer.createChat() as { createDataChannel: (label: string) => RTCDataChannelManager }
+    const chat = peer.createChat()
     peer.dcs = [
       chat.createDataChannel('data'),
       chat.createDataChannel('file'),
@@ -289,16 +275,15 @@ export default class RTCManager extends EventEmitter {
     let peer = this.to(data.id)
     if (!peer) {
       peer = this.createPeer({ id: data.id, toSocketId: data.from })
-      window.peer = peer
       this.peers.push(peer)
       this.emitLocal('peers:add', peer, this.peers)
       this.emitLocal('peers:change', this.peers)
     }
 
     peer.setOffer(data.offer).then((answer: RTCSessionDescriptionInit) =>
-      typedSocket.emit('answer', {
+      socket.emit('answer', {
         answer,
-        from: typedSocket.id,
+        from: socket.id,
         to: data.from,
         id: data.id,
       } satisfies AnswerPayload),
@@ -311,11 +296,7 @@ export default class RTCManager extends EventEmitter {
       toSocketId: toid,
       roomid,
     })
-    if (!peer) {
-      alert('per为空')
-    }
     this.peers.push(peer)
-    window.peer = peer
     this.emitLocal('peers:add', peer, this.peers)
     this.emitLocal('peers:change', this.peers)
     this.negotiationneeded(peer)
@@ -323,7 +304,7 @@ export default class RTCManager extends EventEmitter {
 
   async call(picked: PickedRoom): Promise<void> {
     this.clear()
-    typedSocket.emit('leave', this.roomid)
+    socket.emit('leave', this.roomid)
     this.roomid = picked.roomid
 
     picked.socketIds.forEach((it: { id: string }) => {
@@ -369,10 +350,10 @@ export default class RTCManager extends EventEmitter {
   }
 
   sendCandidate(peer: RTC, candidate: RTCIceCandidate | null): void {
-    typedSocket.emit('candidate', {
+    socket.emit('candidate', {
       candidate: candidate?.toJSON() ?? null,
       to: peer.toSocketId,
-      from: typedSocket.id,
+      from: socket.id,
       id: peer.id,
     } satisfies CandidatePayload)
   }
@@ -395,7 +376,7 @@ export default class RTCManager extends EventEmitter {
     if (state === 'connected') {
       this.logConnectionType(peer)
       if (roomid) {
-        typedSocket.emit('jion', roomid)
+        socket.emit('jion', roomid)
         return
       }
       const streams = Object.values(this.localMedia)
@@ -465,7 +446,8 @@ export default class RTCManager extends EventEmitter {
         console.log('add', track, stream, peer)
         peer.pc.addTrack(track, stream)
       })
-      stream.oninactive = (e: Event) => this.oninactive(e)
+      // oninactive 是 Chrome 的非标准事件，lib.dom 里没有；用属性赋值保证同一个 stream 只挂一个处理器
+      ;(stream as MediaStream & { oninactive: ((e: Event) => void) | null }).oninactive = (e: Event) => this.oninactive(e)
     })
     if (isAdd) {
       this.negotiationneeded(peer)
@@ -493,6 +475,9 @@ export default class RTCManager extends EventEmitter {
         const nwStream = await this.getLocalMedia(type, nwConfig[type] as MediaStreamConstraints | DisplayMediaStreamOptions | boolean)
 
         addStream.set(type, nwStream)
+      } else {
+        // 关闭时同步清掉记录，否则再次开启会被当成“配置未变化”而跳过
+        this.localMedia[type] = { stream: null, config: false }
       }
     }
 
@@ -535,12 +520,6 @@ export default class RTCManager extends EventEmitter {
     await this.logIceDiagnostics(peer, 'connected')
   }
 
-  close(): void {
-    typedSocket.off('candidatae')
-    typedSocket.off('answer')
-    typedSocket.off('offer')
-  }
-
   clear(): void {
     this.peers.forEach((peer: RTC) => {
       peer.pc.close()
@@ -572,7 +551,7 @@ class MessageManager extends EventEmitter {
     return (bytes / (1024 * 1024)).toFixed(2) + ' MB'
   }
 
-  constructor(_type?: string) {
+  constructor() {
     super()
     this.emitLocal = this.emitLocal.bind(this)
   }
@@ -606,12 +585,11 @@ class MessageManager extends EventEmitter {
     this.emitLocal('dc:del', dc)
   }
 
-  emit(key: string, data: unknown, desc?: unknown): (progress: (event: DataChannelProgressEvent & { peersCount: number; completedCount: number }) => void) => void {
+  emit(key: string, data: unknown, desc?: unknown): (progress: (event: SendProgressEvent) => void) => void {
     const map = new Map<RTCDataChannelManager, number>()
     const delFn = (dc: RTCDataChannelManager) => map.delete(dc)
-    console.log('se23nd', data)
     this.on('dc:del', delFn)
-    let p: (event: DataChannelProgressEvent & { peersCount: number; completedCount: number }) => void = () => {}
+    let p: (event: SendProgressEvent) => void = () => {}
     const sendTrackerKey = key + ':send'
     this.speedTrackers.set(sendTrackerKey, { startTime: Date.now(), lastBytes: 0, lastTime: Date.now() })
     this.dcs.forEach((dc: RTCDataChannelManager) => {
@@ -651,7 +629,7 @@ class MessageManager extends EventEmitter {
       })
     })
 
-    return function(progress: (event: DataChannelProgressEvent & { peersCount: number; completedCount: number }) => void): void {
+    return function(progress: (event: SendProgressEvent) => void): void {
       if (typeof progress !== 'function') throw 'progress need function'
       p = progress
     }

@@ -7,7 +7,7 @@
       @focus="emit('update:error', '')"
       :class="{ error }"
     />
-    <span class="err-tips">{{ error }}</span>
+    <span class="err-tips" v-if="error">{{ error }}</span>
   </div>
 </template>
 <script setup lang="ts">
@@ -35,31 +35,52 @@ const emit = defineEmits<{
 <style lang="scss" >
 .v-input {
   position: relative;
-  box-sizing: border-box;
+
   input {
     width: 100%;
-    height: 40px;
-    padding: 0 20px 0 15px;
-    box-sizing: border-box;
-    border-radius: 4px;
+    height: 44px;
+    padding: 0 14px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
     outline: none;
-    border: 1px solid #ccc;
-    &:focus {
-      border: 1px solid rgb(64, 158, 255);
+    color: var(--text);
+    background: var(--surface);
+    font-size: 15px;
+    transition:
+      border-color 0.2s,
+      background-color 0.2s,
+      box-shadow 0.2s;
+
+    // 触屏设备上低于 16px 会触发 iOS 聚焦时自动缩放
+    @media (pointer: coarse) {
+      font-size: 16px;
     }
+
+    &::placeholder {
+      color: var(--text-3);
+    }
+
+    &:hover {
+      border-color: var(--border-strong);
+    }
+
+    &:focus {
+      border-color: var(--accent);
+      background: var(--surface-hover);
+      box-shadow: 0 0 0 4px var(--accent-soft);
+    }
+
     &.error {
-      border: 1px solid rgb(245, 108, 108);
+      border-color: var(--danger);
+      box-shadow: 0 0 0 4px var(--danger-soft);
     }
   }
+
   .err-tips {
-    position: absolute;
-    left: 0;
-    bottom: -20px;
-    color: rgb(245, 108, 108);
     display: block;
-    height: 20px;
+    margin-top: 6px;
     font-size: 12px;
-    line-height: 20px;
+    color: var(--danger-text);
   }
 }
 </style>

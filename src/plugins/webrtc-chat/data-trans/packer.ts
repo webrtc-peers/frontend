@@ -93,10 +93,7 @@ export default class Packer {
           payloadSize,
         }
         const headerBuffer = setHeader(header)
-        const fragmentBlob = new Blob([
-          headerBuffer.buffer.slice(headerBuffer.byteOffset, headerBuffer.byteOffset + headerBuffer.byteLength),
-          payloadBlob,
-        ])
+        const fragmentBlob = new Blob([headerBuffer, payloadBlob])
         headerExtens.sendSize += payloadSize
         this.onprogress(fragmentBlob, headerExtens)
         const p = dataInfo.p

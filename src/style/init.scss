@@ -1,77 +1,259 @@
 @use "@/assets/iconfont/iconfont.css" as *;
 
-* {
-  padding: 0;
-  margin: 0;
-  text-decoration: none;
-  list-style: none;
+/* ---------- Design tokens ---------- */
+:root {
+  color-scheme: dark;
+
+  --bg: #202421;
+  --bg-elevated: #2a2f2b;
+  --bg-stage: #000;
+  --surface: rgb(255 255 255 / 0.04);
+  --surface-hover: rgb(255 255 255 / 0.07);
+  --surface-active: rgb(255 255 255 / 0.11);
+  --border: rgb(255 255 255 / 0.08);
+  --border-strong: rgb(255 255 255 / 0.14);
+
+  --text: #e6e8e3;
+  --text-2: #a4aaa2;
+  --text-3: #868c85;
+
+  --accent: #d9a441;
+  --accent-hover: #e6b458;
+  --accent-soft: rgb(217 164 65 / 0.16);
+  --accent-ring: rgb(217 164 65 / 0.55);
+  --on-accent: #1c1a14;
+  --success: #6faf7e;
+  --success-soft: rgb(111 175 126 / 0.14);
+  --danger: #c94a3a;
+  --danger-hover: #d65b4a;
+  --danger-soft: rgb(201 74 58 / 0.18);
+  --danger-text: #e88a78;
+
+  --radius-sm: 10px;
+  --radius: 14px;
+  --radius-lg: 20px;
+  --radius-xl: 28px;
+  --shadow: 0 18px 50px -12px rgb(0 0 0 / 0.65);
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  --font: ui-sans-serif, system-ui, -apple-system, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+}
+
+/* ---------- Reset ---------- */
+*,
+*::before,
+*::after {
   box-sizing: border-box;
-  color: #666;
+  margin: 0;
+  padding: 0;
 }
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  min-height: 100dvh;
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-tap-highlight-color: transparent;
+  overflow: hidden;
+}
+
+ul,
+ol {
+  list-style: none;
+}
+
 a {
-  color: #666;
+  color: inherit;
+  text-decoration: none;
 }
+
+img,
+video,
+svg {
+  display: block;
+  max-width: 100%;
+}
+
+video {
+  outline: none;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
 button {
-    outline: none;
-    width: 120px;
-    height: 32px;
-    border:none;
-    cursor: pointer;
-    &.conf{
-      background: #409EFF;
-      color: #fff;
-      &:hover{
-        background: #66b1ff;
-        border-color: #66b1ff;
-        color: #fff;
-      }
-    }
-    &.cancel{
-      background: #fff;
-      border:1px solid #dcdfe6;
-      color: #606266;
-      &:hover{
-        color: #409eff;
-        border-color: #c6e2ff;
-        background-color: #ecf5ff;
-      }
-    }
-  
+  border: none;
+  background: none;
+  cursor: pointer;
+  touch-action: manipulation;
 }
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: rgb(217 164 65 / 0.32);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---------- Buttons ---------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 18px;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition:
+    background-color 0.2s,
+    border-color 0.2s,
+    color 0.2s,
+    transform 0.15s var(--ease),
+    box-shadow 0.2s;
+
+  &:active:not(:disabled) {
+    transform: scale(0.97);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+  }
+
+  svg {
+    width: 18px;
+    height: 18px;
+    flex: none;
+  }
+}
+
+.btn-primary {
+  color: var(--on-accent);
+  background: var(--accent);
+
+  &:hover:not(:disabled) {
+    background: var(--accent-hover);
+  }
+}
+
+.btn-ghost {
+  color: var(--text-2);
+  background: var(--surface);
+  border: 1px solid var(--border);
+
+  &:hover:not(:disabled) {
+    color: var(--text);
+    background: var(--surface-hover);
+    border-color: var(--border-strong);
+  }
+}
+
+.btn-lg {
+  height: 48px;
+  padding: 0 24px;
+  border-radius: 14px;
+  font-size: 15px;
+}
+
+.btn-block {
+  width: 100%;
+}
+
+.icon-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  border-radius: 10px;
+  color: var(--text-2);
+  transition:
+    background-color 0.2s,
+    color 0.2s;
+
+  &:hover:not(:disabled) {
+    color: var(--text);
+    background: var(--surface-hover);
+  }
+
+  &:disabled {
+    opacity: 0.4;
+  }
+
+  svg {
+    width: 18px;
+    height: 18px;
+  }
+}
+
+/* ---------- Scrollbar ---------- */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(255 255 255 / 0.14) transparent;
+}
+
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
-  background-color: rgba(255, 255, 255, 0.3);
 }
 
 ::-webkit-scrollbar-track {
-  border-radius: 10px;
-  background-color: rgba(255, 255, 255, 0.3);
-  box-shadow: inset 0 0 6px rgba(0, 0, 0, 0);
-}
-
-::-webkit-scrollbar-track:hover {
-  background-color: rgba(255, 255, 255, 0.5);
-  box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.4);
-}
-
-::-webkit-scrollbar-track:active {
-  background-color: rgba(255,255,255,0.5);
-  box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.4);
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  border-radius: 10px;
-  background: rgba(0,0,0,0.3);
-  box-shadow: inset 1px 1px 0 rgba(0, 0, 0, 0.1);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background: rgb(255 255 255 / 0.14) padding-box;
+
+  &:hover {
+    background: rgb(255 255 255 / 0.24) padding-box;
+  }
 }
 
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.5);
-  box-shadow: inset 1px 1px 0 rgba(0, 0, 0, 0.1);
-}
-
-::-webkit-scrollbar-thumb:active {
-  background: rgba(0, 0, 0, 0.5);
-
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

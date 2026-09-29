@@ -1,35 +1,14 @@
 import { EventEmitter } from '@/tools'
 import WebRTCChat from '@/plugins/webrtc-chat'
+import type DataChannel from '@/plugins/webrtc-chat/datachannel'
 
 export interface RTCConstructorOptions {
-  config?: RTCConfiguration | null
+  id: string
+  toSocketId: string
+  config?: RTCConfiguration
 }
 
-export interface RTCDataChannelProgressEvent {
-  eventKey: string
-  buffer?: ArrayBuffer
-  total: number
-  type?: number
-  sendSize: number
-  getBytes: number
-  desc?: unknown
-  percent?: number
-  peersCount?: number
-  completedCount?: number
-}
-
-export type RTCDataChannelProgressHandler = (event: RTCDataChannelProgressEvent) => void
-
-export interface RTCDataChannelManager {
-  dc: RTCDataChannel
-  onmessage: ((event: { eventKey: string; data: unknown; desc?: unknown }) => void) | null
-  onprogress: RTCDataChannelProgressHandler | null
-  emit: (
-    key: string,
-    data: unknown,
-    desc?: unknown,
-  ) => (progress: RTCDataChannelProgressHandler) => void
-}
+export type RTCDataChannelManager = DataChannel
 
 export interface LegacyRTCPeerConnection extends RTCPeerConnection {
   getRemoteStreams(): MediaStream[]
@@ -38,14 +17,15 @@ export interface LegacyRTCPeerConnection extends RTCPeerConnection {
 
 export default class RTC extends EventEmitter {
   pc!: LegacyRTCPeerConnection
-  id?: string
-  toSocketId?: string
+  id: string
+  toSocketId: string
   dcs?: RTCDataChannelManager[]
   pendingCandidates: RTCIceCandidateInit[] = []
 
-  constructor({ config }: RTCConstructorOptions = {}) {
+  constructor({ id, toSocketId, config }: RTCConstructorOptions) {
     super()
-    config = config || null
+    this.id = id
+    this.toSocketId = toSocketId
 
     if (typeof RTCPeerConnection === 'undefined') {
       alert('浏览器不支持webrtc, 请使用chrome或者微信')
