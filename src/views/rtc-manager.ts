@@ -16,12 +16,21 @@ interface PeerConfig {
 
 interface RoomData {
   roomid: string
+  explain?: unknown
   [key: string]: unknown
 }
 
 interface PickedRoom {
   roomid: string
-  socketIds: Array<{ id: string; [key: string]: unknown }>
+  explain?: unknown
+  secret?: string
+}
+
+interface JoinedPayload {
+  roomid: string
+  socketIds: Array<{ id: string }> | null
+  // 房间密码不对（服务端校验）
+  denied?: boolean
 }
 
 interface OfferPayload {
@@ -96,6 +105,10 @@ export default class RTCManager extends EventEmitter {
     desktopShare: { stream: null, config: null },
   }
   roomid?: string
+  // 断线重连后房间可能已被销毁，需要按原信息重建
+  explain?: unknown
+  // 进房用的密码；房间列表里不再带密码，重连 rejoin 时要自己带上
+  secret?: string
   dcFile: MessageManager
   dcData: MessageManager
 
@@ -104,13 +117,20 @@ export default class RTCManager extends EventEmitter {
     socket.on('offer', (data: IncomingOfferPayload) => this.onOffer(data))
     socket.on('answer', (data: IncomingAnswerPayload) => this.setAnswer(data))
     socket.on('candidate', (data: IncomingCandidatePayload) => this.setRemoteCandidate(data))
+    socket.on('jion', (data: JoinedPayload) => this.onJoined(data))
+    socket.on('peer-leave', (data: { socketid: string }) => this.onPeerLeave(data.socketid))
+    socket.on('__reconnect__', () => {
+      if (this.roomid) socket.emit('rejoin', { roomid: this.roomid, explain: this.explain, secret: this.secret })
+    })
     this.dcFile = new MessageManager()
     this.dcData = new MessageManager()
     this.on('peer:del', (peer: RTC) => {
       this.peers = this.peers.filter((it: RTC) => it !== peer)
       this.emitLocal('peers:change', this.peers)
 
-      this.removeStreams(peer.pc.getRemoteStreams())
+      // Safari 12 起没有 getRemoteStreams，按这个 peer 接收的 track 找出它的画面
+      const tracks = new Set(peer.pc.getReceivers().map((receiver: RTCRtpReceiver) => receiver.track))
+      this.removeStreams(this.streams.filter((stream: MediaStream) => stream.getTracks().some((track: MediaStreamTrack) => tracks.has(track))))
       peer.dcs &&
         peer.dcs.forEach((dc: RTCDataChannelManager) => {
           this.dcFile.removeDc(dc)
@@ -123,6 +143,8 @@ export default class RTCManager extends EventEmitter {
     socket.emit('leave', this.roomid)
     socket.emit('create-room', data)
     this.roomid = data.roomid
+    this.explain = data.explain
+    this.secret = (data.explain as { secret?: string } | undefined)?.secret
   }
 
   negotiationneeded(peer: RTC): void {
@@ -138,7 +160,7 @@ export default class RTCManager extends EventEmitter {
 
   formatCandidate(report: any): string {
     if (!report) return 'unknown'
-    const address = report.address || report.ip || ''
+    const address = report.address || ''
     const port = report.port ? `:${report.port}` : ''
     const relatedAddress = report.relatedAddress ? ` related=${report.relatedAddress}:${report.relatedPort}` : ''
     const url = report.url ? ` via=${report.url}` : ''
@@ -306,10 +328,40 @@ export default class RTCManager extends EventEmitter {
     this.clear()
     socket.emit('leave', this.roomid)
     this.roomid = picked.roomid
+    this.explain = picked.explain
+    this.secret = picked.secret
+    // 立即入房，成员列表由服务端在 jion 回包里给出，避免用本地过期的列表漏连人
+    socket.emit('jion', { roomid: picked.roomid, secret: picked.secret })
+  }
 
-    picked.socketIds.forEach((it: { id: string }) => {
-      this._call(it.id, picked.roomid)
+  onJoined({ roomid, socketIds, denied }: JoinedPayload): void {
+    if (roomid !== this.roomid) return
+    if (!socketIds) {
+      this.emitLocal(denied ? 'room:denied' : 'room:missing', roomid)
+      return
+    }
+    socketIds.forEach((it: { id: string }) => {
+      this._call(it.id, roomid)
     })
+  }
+
+  // 对方主动离开：它那边 pc.close() 后，这边要等 ICE 超时才会变成 failed，这里直接关掉
+  onPeerLeave(socketId: string): void {
+    this.peers
+      .filter((peer: RTC) => peer.toSocketId === socketId)
+      .forEach((peer: RTC) => {
+        // 先移除再 close：peer:del 里要靠 getReceivers 找出要去掉的画面
+        this.emitLocal('peer:del', peer)
+        peer.pc.close()
+      })
+  }
+
+  leave(): void {
+    socket.emit('leave', this.roomid)
+    this.roomid = undefined
+    this.explain = undefined
+    this.secret = undefined
+    this.clear()
   }
 
   setAnswer(data: IncomingAnswerPayload): void {
@@ -372,21 +424,18 @@ export default class RTCManager extends EventEmitter {
   }
 
   onStateChange({ peer, roomid }: ConnectionStateChangePayload): void {
-    const state = peer.pc.iceConnectionState
+    // 这里是 connectionstatechange 回调，要看 connectionState：
+    // 连上时 iceConnectionState 可能已经是 completed，ICE 失败时是 failed 而不是 disconnected
+    const state = peer.pc.connectionState
     if (state === 'connected') {
       this.logConnectionType(peer)
-      if (roomid) {
-        socket.emit('jion', roomid)
-        return
-      }
+      // 主动加入方刚入房时已关掉本地媒体，不用补发流
+      if (roomid) return
       const streams = Object.values(this.localMedia)
         .map((val: LocalMediaEntry) => val.stream)
         .filter(Boolean) as MediaStream[]
-      this.addStreams(streams, peer)
-    } else if (
-      (state === 'disconnected' && peer.pc.connectionState === 'failed') ||
-      state === 'closed'
-    ) {
+      if (this.addStreams(streams, peer)) this.negotiationneeded(peer)
+    } else if (state === 'failed' || state === 'closed') {
       this.emitLocal('peer:del', peer)
     }
   }
@@ -400,7 +449,8 @@ export default class RTCManager extends EventEmitter {
     if (!config) return null
     let newStream: MediaStream | null = null
     if (config === true) {
-      config = { [type]: true } as MediaStreamConstraints
+      // 屏幕共享的约束也写在 video 上，{ desktopShare: true } 浏览器不认
+      config = { [type === 'desktopShare' ? 'video' : type]: true }
     }
     try {
       if (type === 'desktopShare') {
@@ -416,16 +466,16 @@ export default class RTCManager extends EventEmitter {
     return newStream
   }
 
-  removeTracks(tracks: MediaStreamTrack[], peer: RTC): void {
-    const set = new Map<MediaStreamTrack | null, RTCRtpSender>()
+  // 返回是否真的撤下了 track，调用方据此决定要不要重新协商
+  removeTracks(tracks: MediaStreamTrack[], peer: RTC): boolean {
+    const set = new Set(tracks)
+    let removed = false
     peer.pc.getSenders().forEach((sender: RTCRtpSender) => {
-      set.set(sender.track, sender)
+      if (!sender.track || !set.has(sender.track)) return
+      peer.pc.removeTrack(sender)
+      removed = true
     })
-    tracks.forEach((track: MediaStreamTrack) => {
-      if (!set.has(track)) return
-
-      peer.pc.removeTrack(set.get(track) as RTCRtpSender)
-    })
+    return removed
   }
 
   removeStreams(streams: MediaStream[]): void {
@@ -433,31 +483,31 @@ export default class RTCManager extends EventEmitter {
     this.setStreams(this.streams.filter((it: MediaStream) => !set.has(it)))
   }
 
-  addStreams(streams: MediaStream[], peer: RTC): void {
-    const set = new Set<MediaStream>()
-    peer.pc.getLocalStreams().forEach((stream: MediaStream) => set.add(stream))
+  // 返回是否真的加了 track，调用方据此决定要不要重新协商
+  addStreams(streams: MediaStream[], peer: RTC): boolean {
+    // Safari 12 起没有 getLocalStreams，按已在发送的 track 判断
+    const sentTracks = new Set(peer.pc.getSenders().map((sender: RTCRtpSender) => sender.track))
 
     let isAdd = false
 
     streams.forEach((stream: MediaStream) => {
-      if (set.has(stream)) return
+      const tracks = stream.getTracks().filter((track: MediaStreamTrack) => !sentTracks.has(track))
+      if (!tracks.length) return
       isAdd = true
-      stream.getTracks().forEach((track: MediaStreamTrack) => {
+      tracks.forEach((track: MediaStreamTrack) => {
         console.log('add', track, stream, peer)
         peer.pc.addTrack(track, stream)
       })
-      // oninactive 是 Chrome 的非标准事件，lib.dom 里没有；用属性赋值保证同一个 stream 只挂一个处理器
-      ;(stream as MediaStream & { oninactive: ((e: Event) => void) | null }).oninactive = (e: Event) => this.oninactive(e)
     })
-    if (isAdd) {
-      this.negotiationneeded(peer)
-    }
+    return isAdd
   }
 
   async setSelfMediaStatus(nwConfig: Partial<Record<LocalMediaType, MediaStreamConstraints | DisplayMediaStreamOptions | boolean>>): Promise<void> {
     if (!nwConfig) return
 
     const removeStreams = new Set<string>()
+    // 只 stop() 的话对端收不到任何通知，画面会停在最后一帧，必须从每个连接上 removeTrack 再重新协商
+    const stoppedTracks: MediaStreamTrack[] = []
     const addStream = new Map<LocalMediaType, MediaStream | null>()
 
     for (const type of ['video', 'audio', 'desktopShare'] as LocalMediaType[]) {
@@ -470,6 +520,7 @@ export default class RTCManager extends EventEmitter {
 
         const tracks = stream.getTracks()
         tracks.forEach((it: MediaStreamTrack) => it.stop())
+        stoppedTracks.push(...tracks)
       }
       if (nwConfig[type]) {
         const nwStream = await this.getLocalMedia(type, nwConfig[type] as MediaStreamConstraints | DisplayMediaStreamOptions | boolean)
@@ -487,32 +538,43 @@ export default class RTCManager extends EventEmitter {
         this.localMedia[key] = { config: nwConfig[key], stream }
         if (stream) {
           ;(stream as MediaStream & { isSelf?: boolean }).isSelf = true
+          this.watchLocalStream(stream)
           pureAddStream.push(stream)
         }
       }
     }
 
     this.peers.forEach((peer: RTC) => {
-      this.addStreams(pureAddStream, peer)
+      // 撤和加都要执行，合并成一次协商，不能用 || 短路
+      const removed = this.removeTracks(stoppedTracks, peer)
+      const added = this.addStreams(pureAddStream, peer)
+      if (removed || added) this.negotiationneeded(peer)
     })
 
     this.setStreams(this.streams.filter((it: MediaStream) => !removeStreams.has(it.id)).concat(pureAddStream))
   }
 
-  oninactive(e: Event): void {
-    const stream = e.target as MediaStream
-    for (const peer of this.peers) {
-      this.removeTracks(stream.getTracks(), peer)
-      this.negotiationneeded(peer)
-    }
+  // 点了浏览器自带的“停止共享”、摄像头被拔掉等外部原因结束时，track 会触发 ended；
+  // 自己调 stop() 不会触发，那条路径在 setSelfMediaStatus 里处理
+  watchLocalStream(stream: MediaStream): void {
+    stream.getTracks().forEach((track: MediaStreamTrack) => {
+      track.addEventListener('ended', () => {
+        if (stream.getTracks().every((it: MediaStreamTrack) => it.readyState === 'ended')) this.onLocalStreamEnded(stream)
+      })
+    })
+  }
+
+  onLocalStreamEnded(stream: MediaStream): void {
     const type = (Object.keys(this.localMedia) as LocalMediaType[]).find(
       (mediaType: LocalMediaType) => this.localMedia[mediaType].stream === stream,
     )
 
     if (!type) return
 
-    this.localMedia[type].config = false
-    this.localMedia[type].stream = null
+    for (const peer of this.peers) {
+      if (this.removeTracks(stream.getTracks(), peer)) this.negotiationneeded(peer)
+    }
+    this.localMedia[type] = { stream: null, config: false }
     this.setStreams(this.streams.filter((it: MediaStream) => it !== stream))
   }
 

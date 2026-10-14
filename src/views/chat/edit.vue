@@ -134,7 +134,7 @@ async function fileChange(event: Event) {
 		overflow-y: auto;
 		outline: none;
 		line-height: 1.55;
-		word-break: break-word;
+		overflow-wrap: anywhere;
 		color: var(--text);
 
 		&:empty::before {

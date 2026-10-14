@@ -1,42 +1,10 @@
 /**
- * TURN long-term credential mechanism (RFC 4616)
- * username = timestamp:appname, credential = HMAC-SHA1(secret, username)
+ * TURN 临时凭据（coturn use-auth-secret）由信令服务按连接下发，密钥只放在服务端（server/index.mjs）。
+ * 这里只保存最新一份，新建 RTCPeerConnection 时读取。
  */
+import socket from '@/socket'
 
-const TURN_SECRET = 'b757d9e9d76df'
-const TURN_APP_NAME = 'myapp'
-const CREDENTIAL_LIFETIME = 86400
 const TURN_HOST = 'webrtc.web-play.cn'
-
-async function hmacSha1(key: string, message: string): Promise<string> {
-  const encoder = new TextEncoder()
-  const cryptoKey = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(key),
-    { name: 'HMAC', hash: 'SHA-1' },
-    false,
-    ['sign'],
-  )
-  const signature = await crypto.subtle.sign('HMAC', cryptoKey, encoder.encode(message))
-  let binary = ''
-  const bytes = new Uint8Array(signature)
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte)
-  }
-  return btoa(binary)
-}
-
-async function generateIceServers(): Promise<RTCIceServer[]> {
-  const timestamp = Math.floor(Date.now() / 1000) + CREDENTIAL_LIFETIME
-  const username = `${timestamp}:${TURN_APP_NAME}`
-  const credential = await hmacSha1(TURN_SECRET, username)
-
-  return [
-    { urls: `stun:${TURN_HOST}:3478` },
-    { urls: `turn:${TURN_HOST}:3478`, username, credential },
-    { urls: `turns:${TURN_HOST}:5349`, username, credential },
-  ]
-}
 
 type RTCIceServerConfig = RTCIceServer & { urls: string | string[] }
 
@@ -47,5 +15,11 @@ interface RTCIceConfigurationExt extends RTCConfiguration {
 export type { RTCIceServerConfig, RTCIceConfigurationExt }
 
 export const iceConfig: RTCIceConfigurationExt = {
-  iceServers: await generateIceServers(),
+  // 拿到服务端下发的凭据之前先只用 STUN
+  iceServers: [{ urls: `stun:${TURN_HOST}:3478` }],
 }
+
+// 连上（含重连）时随 __connect__ 下发，之后服务端定时推送新的
+socket.on('ice', (list: RTCIceServerConfig[]) => {
+  if (Array.isArray(list) && list.length) iceConfig.iceServers = list
+})

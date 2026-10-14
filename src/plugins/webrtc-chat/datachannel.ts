@@ -1,5 +1,5 @@
 import DataTrans from './data-trans'
-import { EventEmitter, reader } from './tool'
+import { EventEmitter } from './tool'
 import type { MessageMeta } from './tool'
 
 export interface DataChannelProgressEvent<TDesc = unknown> {
@@ -51,14 +51,37 @@ export default class DataChannel extends EventEmitter {
   }
 
   async _onpackprogress(blob: Blob, _header: MessageMeta): Promise<void> {
-    const buff = await reader.readAsArrayBuffer(blob)
-    this.dc.send(buff)
+    // 不管成败都要 next()，否则 packer 卡住，这条通道后面的消息全都发不出去
+    try {
+      const buff = await blob.arrayBuffer()
+      // 连接还没建好就点了发送，此时 send 会抛 InvalidStateError，等通道打开再发
+      if (this.dc.readyState === 'connecting') {
+        await this._waitOpen()
+      }
+      if (this.dc.readyState !== 'open') return
 
-    if (this.dc.bufferedAmount > this.bufferHighWaterMark) {
-      await new Promise<void>(r => (this.lowBuffer = r))
+      this.dc.send(buff)
+
+      if (this.dc.bufferedAmount > this.bufferHighWaterMark) {
+        await new Promise<void>(r => (this.lowBuffer = r))
+      }
+    } catch (e) {
+      console.error('datachannel:' + this.dc.label + ' send failed', e)
+    } finally {
+      this.trans.packer.next()
     }
+  }
 
-    this.trans.packer.next()
+  _waitOpen(): Promise<void> {
+    return new Promise<void>(resolve => {
+      const done = () => {
+        this.dc.removeEventListener('open', done)
+        this.dc.removeEventListener('close', done)
+        resolve()
+      }
+      this.dc.addEventListener('open', done)
+      this.dc.addEventListener('close', done)
+    })
   }
 
   handleTransEvent(): void {
@@ -87,13 +110,16 @@ export default class DataChannel extends EventEmitter {
       }
     })
 
-    dc.addEventListener('bufferedamountlow', () => {
+    const releaseLowBuffer = () => {
       if (this.lowBuffer) {
         const resolve = this.lowBuffer
         this.lowBuffer = null
         resolve()
       }
-    })
+    }
+    dc.addEventListener('bufferedamountlow', releaseLowBuffer)
+    // 通道关了 bufferedamountlow 不会再来，也要放行
+    dc.addEventListener('close', releaseLowBuffer)
   }
 
   emit(key: string, ...data: [unknown?, unknown?]): (progress: (header: MessageMeta) => void) => void {

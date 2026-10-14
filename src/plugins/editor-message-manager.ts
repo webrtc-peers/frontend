@@ -1,5 +1,3 @@
-import { fileReader } from '@/tools'
-
 type EditorManagedFileType = 'img' | 'video' | 'file'
 
 interface EditorManagedBase {
@@ -31,7 +29,8 @@ interface AddedAsset {
   url: string
 }
 
-const readBlob = async (file: Blob): Promise<Blob> => fileReader({ data: file, type: 'blob' }) as Promise<Blob>
+// 把内容读进内存另存一份，不依赖选择框里那个 File 的引用一直有效
+const readBlob = async (file: Blob): Promise<Blob> => new Blob([await file.arrayBuffer()])
 
 export default class EditorMessageManager {
   files = new Map<string, EditorManagedFile>()
@@ -44,7 +43,7 @@ export default class EditorMessageManager {
       file: blob,
       type: 'img',
     })
-    area.innerHTML += img
+    area.insertAdjacentHTML('beforeend', img)
   }
 
   async _add(file: File): Promise<AddedAsset> {
@@ -61,7 +60,7 @@ export default class EditorMessageManager {
   async addVideo(file: File, area: HTMLElement): Promise<void> {
     const { hash, blob, url } = await this._add(file)
     const html = `<video  data-hash="${hash}" contenteditable="false"  controls class="chat-video" src="${url}"></video><br>`
-    area.innerHTML += html
+    area.insertAdjacentHTML('beforeend', html)
     this.files.set(hash, {
       hash,
       file: blob,
@@ -82,13 +81,13 @@ export default class EditorMessageManager {
       fileName,
       type: 'file',
     })
-    area.innerHTML += html
+    area.insertAdjacentHTML('beforeend', html)
   }
 
   filter(area: HTMLElement): { texts: string[]; files: EditorManagedFile[] } {
     const replaceHash = (Math.random() * 10 ** 17).toString()
     const replaceWithHash = (doms: NodeListOf<HTMLElement>, hash: string): string[] => {
-      return Array.prototype.slice.call(doms).map((it: HTMLElement) => {
+      return Array.from(doms, (it: HTMLElement) => {
         it.replaceWith(document.createTextNode(hash))
         return it.dataset.hash ?? ''
       })

@@ -183,7 +183,7 @@ onMounted(() => {
 		padding: 9px 13px;
 		border-radius: 18px 18px 18px 6px;
 		line-height: 1.55;
-		word-break: break-word;
+		overflow-wrap: anywhere;
 		color: var(--text);
 		background: var(--surface-active);
 	}

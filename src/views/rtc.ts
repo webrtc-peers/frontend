@@ -10,13 +10,8 @@ export interface RTCConstructorOptions {
 
 export type RTCDataChannelManager = DataChannel
 
-export interface LegacyRTCPeerConnection extends RTCPeerConnection {
-  getRemoteStreams(): MediaStream[]
-  getLocalStreams(): MediaStream[]
-}
-
 export default class RTC extends EventEmitter {
-  pc!: LegacyRTCPeerConnection
+  pc!: RTCPeerConnection
   id: string
   toSocketId: string
   dcs?: RTCDataChannelManager[]
@@ -32,28 +27,29 @@ export default class RTC extends EventEmitter {
       return
     }
 
-    this.pc = new RTCPeerConnection(config) as LegacyRTCPeerConnection
+    this.pc = new RTCPeerConnection(config)
   }
 
-  createOffer(): Promise<RTCSessionDescriptionInit> {
-    return this.pc.createOffer().then((offer: RTCSessionDescriptionInit) => {
-      return this.pc.setLocalDescription(new RTCSessionDescription(offer)).then(() => offer)
-    })
+  // SDP / candidate 直接传 init 对象即可，RTCSessionDescription 构造函数已废弃
+  async createOffer(): Promise<RTCSessionDescriptionInit> {
+    const offer = await this.pc.createOffer()
+    await this.pc.setLocalDescription(offer)
+    return offer
   }
 
-  createAnswer(): Promise<RTCSessionDescriptionInit> {
-    return this.pc.createAnswer().then((answer: RTCSessionDescriptionInit) => {
-      return this.pc.setLocalDescription(new RTCSessionDescription(answer)).then(() => answer)
-    })
+  async createAnswer(): Promise<RTCSessionDescriptionInit> {
+    const answer = await this.pc.createAnswer()
+    await this.pc.setLocalDescription(answer)
+    return answer
   }
 
   async setAnswer(answer: RTCSessionDescriptionInit): Promise<void> {
-    await this.pc.setRemoteDescription(new RTCSessionDescription(answer))
+    await this.pc.setRemoteDescription(answer)
     await this.flushPendingCandidates()
   }
 
   async setOffer(offer: RTCSessionDescriptionInit): Promise<RTCSessionDescriptionInit> {
-    await this.pc.setRemoteDescription(new RTCSessionDescription(offer))
+    await this.pc.setRemoteDescription(offer)
     await this.flushPendingCandidates()
     return this.createAnswer()
   }
@@ -66,7 +62,7 @@ export default class RTC extends EventEmitter {
       return
     }
 
-    await this.pc.addIceCandidate(new RTCIceCandidate(candidate))
+    await this.pc.addIceCandidate(candidate)
   }
 
   async flushPendingCandidates(): Promise<void> {
@@ -75,7 +71,7 @@ export default class RTC extends EventEmitter {
     const candidates = [...this.pendingCandidates]
     this.pendingCandidates = []
     for (const candidate of candidates) {
-      await this.pc.addIceCandidate(new RTCIceCandidate(candidate))
+      await this.pc.addIceCandidate(candidate)
     }
   }
 

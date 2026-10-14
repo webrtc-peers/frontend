@@ -23,7 +23,7 @@
 					<span class="info">
 						<span class="name">
 							<span class="name-text">{{ roomName(item.info) }}</span>
-							<Lock v-if="item.info.explain.secret" class="lock" />
+							<Lock v-if="item.info.explain.locked" class="lock" />
 						</span>
 						<span class="tips">{{ item.info.explain.tips || '暂无描述' }}</span>
 					</span>
@@ -97,10 +97,12 @@ import { toast } from '@/tools/utils'
 import VDialog from '@/components/v-dialog.vue'
 import VInput from '@/components/v-input.vue'
 
+// 建房时带 secret；服务端广播的房间列表里只有 locked，密码不出服务端
 interface RoomExplain {
 	name: string
 	tips: string
-	secret: string
+	secret?: string
+	locked?: boolean
 }
 
 interface RoomInfo {
@@ -117,7 +119,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
 	(e: 'create-room', payload: { explain: RoomExplain; roomid: string }): void
-	(e: 'call', payload: { roomid: string; roomInfo: RoomInfo & { roomid: string } }): void
+	(e: 'call', payload: { roomid: string; roomInfo: RoomInfo & { roomid: string }; secret: string }): void
 }>()
 
 const rooms = ref<RoomsMap | null>(null)
@@ -165,24 +167,35 @@ function jion(nextPicked: string) {
 	if (props.currentRoomId === nextPicked) return
 
 	picked.value = nextPicked
-	if (fillSecret.value !== data.explain.secret) {
+	if (data.explain.locked) {
 		fillSecret.value = ''
 		secretError.value = ''
 		secretDialog.value = true
 		return
 	}
-	secretDialog.value = false
-	emit('call', { roomid: nextPicked, roomInfo: { ...data, roomid: nextPicked } })
+	enter(nextPicked, '')
 }
 
-function confSecret() {
-	const data = rooms.value?.[picked.value]
+function enter(roomid: string, roomSecret: string) {
+	const data = rooms.value?.[roomid]
 	if (!data) return
-	if (fillSecret.value !== data.explain.secret) {
+	secretDialog.value = false
+	emit('call', { roomid, roomInfo: { ...data, roomid }, secret: roomSecret })
+}
+
+// 密码由服务端校验，结果在 check-secret 回包里
+function confSecret() {
+	if (!rooms.value?.[picked.value]) return
+	socket.emit('check-secret', { roomid: picked.value, secret: fillSecret.value })
+}
+
+const handleCheckSecret = ({ roomid, ok }: { roomid: string; ok: boolean }) => {
+	if (roomid !== picked.value || !secretDialog.value) return
+	if (!ok) {
 		secretError.value = '密码错误'
 		return
 	}
-	jion(picked.value)
+	enter(roomid, fillSecret.value)
 }
 
 const handleRooms = (nextRooms: RoomsMap) => {
@@ -190,9 +203,11 @@ const handleRooms = (nextRooms: RoomsMap) => {
 }
 
 socket.on('rooms', handleRooms)
+socket.on('check-secret', handleCheckSecret)
 
 onBeforeUnmount(() => {
 	socket.off('rooms', handleRooms)
+	socket.off('check-secret', handleCheckSecret)
 })
 
 defineExpose({ openCreate })

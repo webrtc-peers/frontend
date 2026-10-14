@@ -1,4 +1,4 @@
-import { parseHeader, reader } from '../tool'
+import { parseHeader } from '../tool'
 import type { ProgressHeader, UnpackedMessage } from '../tool'
 
 // 连续分片攒到这个大小就合成一个 Blob：Blob 数据由浏览器托管，不占 JS 堆，Chrome 超出内存配额还会落盘
@@ -83,13 +83,13 @@ export default class Unpacker {
       if (['Blob', 'File'].includes(type)) {
         data = blob
       } else if (type === 'ArrayBuffer') {
-        data = await reader.readAsArrayBuffer(blob)
+        data = await blob.arrayBuffer()
       } else if (type === 'undefined') {
         data = undefined
       } else if (type === 'null') {
         data = null
       } else {
-        const str = await reader.readAsText(blob)
+        const str = await blob.text()
         data = JSON.parse(str) as unknown
       }
       this.onunpackover(eventKey, data, message.desc)

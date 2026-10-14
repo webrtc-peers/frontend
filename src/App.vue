@@ -200,6 +200,7 @@ import Rooms from "@/views/rooms.vue";
 import RTCManager from "@/views/rtc-manager";
 import Chat from "@/views/chat/index.vue";
 import { isMobile } from "@/tools";
+import { toast } from "@/tools/utils";
 import Play from "@/views/play.vue";
 import socket from "@/socket";
 
@@ -225,7 +226,8 @@ interface ChatMessage {
 interface RoomExplain {
   name: string;
   tips: string;
-  secret: string;
+  secret?: string;
+  locked?: boolean;
 }
 
 interface RoomPayload {
@@ -260,7 +262,8 @@ interface RTCManagerLike {
   ) => RTCManagerLike | false;
   clear: () => void;
   createRoom: (data: RoomPayload) => void;
-  call: (data: { roomid: string; socketIds: Array<{ id: string }> }) => void;
+  call: (data: { roomid: string; explain: RoomExplain; secret?: string }) => void;
+  leave: () => void;
   setSelfMediaStatus: (config: Record<string, boolean>) => Promise<unknown>;
   dcData: {
     on: (
@@ -395,20 +398,32 @@ function createRoom(data: RoomPayload) {
   enterRoom(data);
 }
 
-function call({ roomid, roomInfo }: { roomid: string; roomInfo: RoomPayload }) {
+function call({ roomid, roomInfo, secret }: { roomid: string; roomInfo: RoomPayload; secret: string }) {
   resetConnection();
-  rtcManager.call({ roomid, socketIds: roomInfo.socketIds ?? [] });
+  rtcManager.call({ roomid, explain: roomInfo.explain, secret });
   enterRoom(roomInfo);
 }
 
 function leaveRoom() {
   if (!room.value) return;
-  socket.emit("leave", room.value.roomid);
+  rtcManager.leave();
   resetConnection();
   room.value = null;
   chats.value = [];
   isChatOpen.value = false;
   notReadMessage.value = 0;
+}
+
+// 点进去时房间已经没人被销毁了（本地列表还没刷新）
+function handleRoomMissing() {
+  toast("房间已不存在");
+  leaveRoom();
+}
+
+// 服务端进房时密码校验没过（弹窗校验之后房间被销毁又被别人重建这类极端情况）
+function handleRoomDenied() {
+  toast("密码错误");
+  leaveRoom();
 }
 
 function sendTexts(texts: string[]) {
@@ -505,7 +520,9 @@ function getChatFileProgress(event: FileProgressEvent) {
 
 rtcManager
   .on("streams", handleStreamChange)
-  .on("peers:change", handlePeersChange);
+  .on("peers:change", handlePeersChange)
+  .on("room:missing", handleRoomMissing)
+  .on("room:denied", handleRoomDenied);
 rtcManager.dcData.on("chat", getChatText);
 rtcManager.dcFile
   .on("chat-file", getFile)
@@ -516,6 +533,8 @@ rtcManager.dcFile
 onBeforeUnmount(() => {
   rtcManager.off("streams", handleStreamChange);
   rtcManager.off("peers:change", handlePeersChange);
+  rtcManager.off("room:missing", handleRoomMissing);
+  rtcManager.off("room:denied", handleRoomDenied);
   rtcManager.dcData.off("chat", getChatText);
   rtcManager.dcFile.off("chat-file", getFile);
   rtcManager.dcFile.off("chat-file:progress", getChatFileProgress);

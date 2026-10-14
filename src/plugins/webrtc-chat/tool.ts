@@ -55,19 +55,6 @@ type EventHandler = (...data: any[]) => unknown
 type EventMapConstraint<TEvents> = {
   [K in keyof TEvents]: EventHandler
 }
-type FileReaderReadMethod = 'readAsArrayBuffer' | 'readAsBinaryString' | 'readAsDataURL' | 'readAsText'
-
-interface FileReaderResultMap {
-  readAsArrayBuffer: ArrayBuffer
-  readAsBinaryString: string
-  readAsDataURL: string
-  readAsText: string
-}
-
-export type FileReaderProxy = {
-  [K in FileReaderReadMethod]: (value: Blob) => Promise<FileReaderResultMap[K]>
-}
-
 const toUint8Array = (buffer: ArrayBuffer | ArrayBufferView): Uint8Array => {
   if (buffer instanceof Uint8Array) {
     return buffer
@@ -156,30 +143,6 @@ export function toBlob(data: unknown): Blob {
   }
   return new Blob([JSON.stringify(data)])
 }
-
-const isFileReaderMethod = (property: PropertyKey): property is FileReaderReadMethod =>
-  ['readAsArrayBuffer', 'readAsBinaryString', 'readAsDataURL', 'readAsText'].includes(
-    String(property),
-  )
-
-export const reader = new Proxy({} as FileReaderProxy, {
-  get(_target, property) {
-    if (!isFileReaderMethod(property)) {
-      return undefined
-    }
-    return (value: Blob) =>
-      new Promise<FileReaderResultMap[typeof property]>((resolve, reject) => {
-        const fileReader = new FileReader()
-        fileReader.onload = event => {
-          resolve(event.target?.result as FileReaderResultMap[typeof property])
-        }
-        fileReader.onerror = () => {
-          reject(fileReader.error)
-        }
-        fileReader[property](value)
-      })
-  },
-})
 
 export class EventEmitter<TEvents extends EventMapConstraint<TEvents> = Record<string, EventHandler>> {
   _events: Record<string, EventHandler[] | null> = {}

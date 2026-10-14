@@ -27,9 +27,6 @@ importers:
       '@types/node':
         specifier: ^24.19.0
         version: 24.19.0
-      '@types/uuid':
-        specifier: ^10.0.0
-        version: 10.0.0
       '@vitejs/plugin-vue':
         specifier: ^6.0.9
         version: 6.0.9(vite@8.3.1(@types/node@24.19.0)(sass@1.105.0))(vue@3.5.43(typescript@5.9.3))
@@ -259,9 +256,6 @@ packages:
 
   '@types/node@24.19.0':
     resolution: {integrity: sha512-zY+5tKxXdhGh1PYI0ac+7juvEu4OI6vWtVVoj5i2m42jxAY1U+zHGt6QCyOFwykdP62sM3MJ9stoYYUw5aCWew==}
-
-  '@types/uuid@10.0.0':
-    resolution: {integrity: sha512-7gqG38EyHgyP1S+7+xomFtL+ZNHcKv6DwNaCZmJmo1vgMugyF3TCnXVg4t1uk89mLNwnLtnY3TpOpCOyp1/xHQ==}
 
   '@vitejs/plugin-vue@6.0.9':
     resolution: {integrity: sha512-rD/MORlhaZMlXWW0rEn4FB4wMinWC0z/D7Ye160S5+Rs1mC8ZDAdcDp4SjKfUhG5t8q1ktcPVw4xuTkPRlzrSA==}
@@ -723,8 +717,6 @@ snapshots:
   '@types/node@24.19.0':
     dependencies:
       undici-types: 7.24.6
-
-  '@types/uuid@10.0.0': {}
 
   '@vitejs/plugin-vue@6.0.9(vite@8.3.1(@types/node@24.19.0)(sass@1.105.0))(vue@3.5.43(typescript@5.9.3))':
     dependencies:
