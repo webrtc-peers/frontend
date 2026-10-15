@@ -153,7 +153,11 @@ onMounted(() => {
 		flex-direction: column;
 		align-items: flex-start;
 		margin-top: 14px;
-		animation: msg-in 0.3s var(--ease);
+		// 从气泡尖角那一侧弹出来，透明度单独走缓出，免得跟着弹簧闪一下
+		transform-origin: left bottom;
+		animation:
+			msg-fade 0.2s var(--ease),
+			msg-pop var(--spring-duration) var(--ease-spring);
 
 		&:first-child {
 			margin-top: 0;
@@ -165,6 +169,7 @@ onMounted(() => {
 
 		&.is-self {
 			align-items: flex-end;
+			transform-origin: right bottom;
 		}
 	}
 
@@ -302,10 +307,15 @@ onMounted(() => {
 	}
 }
 
-@keyframes msg-in {
+@keyframes msg-fade {
 	from {
 		opacity: 0;
-		transform: translateY(6px);
+	}
+}
+
+@keyframes msg-pop {
+	from {
+		transform: scale(0.95);
 	}
 }
 </style>

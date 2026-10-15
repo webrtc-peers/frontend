@@ -1,20 +1,21 @@
- 
-# read -p '确认发布前端代码请入ok: ' qd
-# if [ $qd != 'ok' ]
-# then
-#   echo '取消发布'
-#   exit 0
-# fi
+#!/bin/sh
+# 在任意目录都能跑：sh frontend/pub.sh 或 ./pub.sh
+set -e
+cd "$(dirname "$0")"
 
-echo '2、打包'
+host=root@web-play.cn
+dir=/root/webroot/webrtc-peers/frontend
+next=$dir.next
+
+echo '1、打包'
 pnpm run build
 
-message="cd /root/webroot/webrtc-peers/frontend && rm -rf *"
+# 先传到 $next 再整体换上去：打包或上传中途失败都不影响线上；上一版留在 $dir.prev，回滚就换回来
+echo '2、上传'
+ssh $host "rm -rf $next && mkdir -p $next"
+scp -r dist/* $host:$next/
 
-echo '3、执行远程命令：' "$message"
-ssh root@web-play.cn "$message"
-
-echo '4、传送'
-scp -r dist/* root@web-play.cn:/root/webroot/webrtc-peers/frontend
+echo '3、切换目录'
+ssh $host "rm -rf $dir.prev && mv $dir $dir.prev && mv $next $dir"
 
 echo '前端代码发布完成'

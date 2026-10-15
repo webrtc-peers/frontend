@@ -220,7 +220,7 @@ async function fileChange(event: Event) {
 		background: var(--accent);
 		transition:
 			background-color 0.2s,
-			transform 0.15s var(--ease);
+			transform var(--spring-duration) var(--ease-spring);
 
 		&:hover:not(:disabled) {
 			background: var(--accent-hover);
@@ -228,6 +228,9 @@ async function fileChange(event: Event) {
 
 		&:active:not(:disabled) {
 			transform: scale(0.92);
+			transition:
+				background-color 0.2s,
+				transform 0.16s var(--ease);
 		}
 
 		&:disabled {

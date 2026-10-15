@@ -12,6 +12,7 @@ interface PeerConfig {
   toSocketId: string
   id: string
   roomid?: string
+  polite?: boolean
 }
 
 interface RoomData {
@@ -148,13 +149,8 @@ export default class RTCManager extends EventEmitter {
   }
 
   negotiationneeded(peer: RTC): void {
-    peer.createOffer().then((offer: RTCSessionDescriptionInit) => {
-      socket.emit('offer', {
-        from: socket.id,
-        to: peer.toSocketId,
-        id: peer.id,
-        offer,
-      } satisfies OfferPayload)
+    peer.negotiate().catch((e: unknown) => {
+      console.error(`[WebRTC][${peer.id}] negotiate failed`, e)
     })
   }
 
@@ -277,8 +273,24 @@ export default class RTCManager extends EventEmitter {
     peer.pc.ontrack = (track: RTCTrackEvent) => this.remoteTrackHandler(track)
   }
 
-  createPeer({ toSocketId, id, roomid }: PeerConfig): RTC {
-    const peer = new RTC({ id, toSocketId, config: iceConfig })
+  createPeer({ toSocketId, id, roomid, polite }: PeerConfig): RTC {
+    const peer = new RTC({ id, toSocketId, config: iceConfig, polite })
+    peer.on('offer', (offer: RTCSessionDescriptionInit) => {
+      socket.emit('offer', {
+        from: socket.id,
+        to: peer.toSocketId,
+        id: peer.id,
+        offer,
+      } satisfies OfferPayload)
+    })
+    peer.on('answer', (answer: RTCSessionDescriptionInit) => {
+      socket.emit('answer', {
+        answer,
+        from: socket.id,
+        to: peer.toSocketId,
+        id: peer.id,
+      } satisfies AnswerPayload)
+    })
 
     const chat = peer.createChat()
     peer.dcs = [
@@ -288,6 +300,7 @@ export default class RTCManager extends EventEmitter {
     ]
     this.dcData.add(peer.dcs[0])
     this.dcFile.add(peer.dcs[1])
+    peer.dcs[2].on('stream:off', (data: { streamId?: unknown }) => this.onRemoteStreamOff(peer, data?.streamId))
     void this.addEventListenner(peer, roomid)
 
     return peer
@@ -296,20 +309,16 @@ export default class RTCManager extends EventEmitter {
   onOffer(data: IncomingOfferPayload): void {
     let peer = this.to(data.id)
     if (!peer) {
-      peer = this.createPeer({ id: data.id, toSocketId: data.from })
+      // 被呼叫的一方让路，发起方（_call）不让
+      peer = this.createPeer({ id: data.id, toSocketId: data.from, polite: true })
       this.peers.push(peer)
       this.emitLocal('peers:add', peer, this.peers)
       this.emitLocal('peers:change', this.peers)
     }
 
-    peer.setOffer(data.offer).then((answer: RTCSessionDescriptionInit) =>
-      socket.emit('answer', {
-        answer,
-        from: socket.id,
-        to: data.from,
-        id: data.id,
-      } satisfies AnswerPayload),
-    )
+    peer.setOffer(data.offer).catch((e: unknown) => {
+      console.error(`[WebRTC][${data.id}] setOffer failed`, e)
+    })
   }
 
   _call(toid: string, roomid: string): void {
@@ -317,6 +326,7 @@ export default class RTCManager extends EventEmitter {
       id: randomStr(),
       toSocketId: toid,
       roomid,
+      polite: false,
     })
     this.peers.push(peer)
     this.emitLocal('peers:add', peer, this.peers)
@@ -545,6 +555,7 @@ export default class RTCManager extends EventEmitter {
     }
 
     this.peers.forEach((peer: RTC) => {
+      this.notifyStreamOff(peer, removeStreams)
       // 撤和加都要执行，合并成一次协商，不能用 || 短路
       const removed = this.removeTracks(stoppedTracks, peer)
       const added = this.addStreams(pureAddStream, peer)
@@ -554,10 +565,61 @@ export default class RTCManager extends EventEmitter {
     this.setStreams(this.streams.filter((it: MediaStream) => !removeStreams.has(it.id)).concat(pureAddStream))
   }
 
+  // 手机前后摄像头互切：流还是原来那个，只换里面的 track，各连接用 replaceTrack 换掉发送的画面，不用重新协商。
+  // 返回 switched：已切换；kept：新的打不开，退回了原来那个；off：摄像头没了
+  async switchCamera(): Promise<'switched' | 'kept' | 'off'> {
+    const stream = this.localMedia.video.stream
+    const oldTrack = stream?.getVideoTracks()[0]
+    if (!stream || !oldTrack) return 'off'
+
+    const current = oldTrack.getSettings().facingMode
+    const facingMode = current === 'environment' ? 'user' : 'environment'
+    // 不少手机不能同时开两个摄像头，iOS 再开一个还会把旧的停掉，所以先停旧的
+    oldTrack.stop()
+    const open = (video: MediaTrackConstraints | true) =>
+      navigator.mediaDevices
+        .getUserMedia({ video })
+        .then((newStream: MediaStream) => newStream.getVideoTracks()[0])
+        .catch((e: unknown) => {
+          console.error(e)
+          return undefined
+        })
+    const switched = await open({ facingMode })
+    // 新的打不开就重新打开原来那个，别让画面直接没了
+    const newTrack = switched ?? (await open(current ? { facingMode: current } : true))
+
+    // 等摄像头的时候已经关了摄像头或离开了房间
+    if (this.localMedia.video.stream !== stream) {
+      newTrack?.stop()
+      return 'off'
+    }
+    if (!newTrack) {
+      this.onLocalStreamEnded(stream)
+      return 'off'
+    }
+
+    stream.removeTrack(oldTrack)
+    stream.addTrack(newTrack)
+    this.watchLocalStream(stream, [newTrack])
+    const replacing: Promise<void>[] = []
+    this.peers.forEach((peer: RTC) => {
+      peer.pc.getSenders().forEach((sender: RTCRtpSender) => {
+        if (sender.track !== oldTrack) return
+        replacing.push(
+          sender.replaceTrack(newTrack).catch((e: unknown) => console.error(`[WebRTC][${peer.id}] replaceTrack failed`, e)),
+        )
+      })
+    })
+    await Promise.all(replacing)
+    // 流对象没变，换个新数组让界面重新挂一次画面
+    this.setStreams(this.streams)
+    return switched ? 'switched' : 'kept'
+  }
+
   // 点了浏览器自带的“停止共享”、摄像头被拔掉等外部原因结束时，track 会触发 ended；
   // 自己调 stop() 不会触发，那条路径在 setSelfMediaStatus 里处理
-  watchLocalStream(stream: MediaStream): void {
-    stream.getTracks().forEach((track: MediaStreamTrack) => {
+  watchLocalStream(stream: MediaStream, tracks: MediaStreamTrack[] = stream.getTracks()): void {
+    tracks.forEach((track: MediaStreamTrack) => {
       track.addEventListener('ended', () => {
         if (stream.getTracks().every((it: MediaStreamTrack) => it.readyState === 'ended')) this.onLocalStreamEnded(stream)
       })
@@ -572,10 +634,26 @@ export default class RTCManager extends EventEmitter {
     if (!type) return
 
     for (const peer of this.peers) {
+      this.notifyStreamOff(peer, [stream.id])
       if (this.removeTracks(stream.getTracks(), peer)) this.negotiationneeded(peer)
     }
     this.localMedia[type] = { stream: null, config: false }
     this.setStreams(this.streams.filter((it: MediaStream) => it !== stream))
+  }
+
+  // removeTrack 要等重新协商完对端才会收到 removetrack，iOS 上协商慢或失败时会一直定格在最后一帧，
+  // 所以关闭时先走 DataChannel 直接通知对端撤掉画面
+  notifyStreamOff(peer: RTC, streamIds: Iterable<string>): void {
+    for (const streamId of streamIds) peer.dcs?.[2]?.emit('stream:off', { streamId })
+  }
+
+  // 只撤这个连接收到的流，别的成员发来的不受影响
+  onRemoteStreamOff(peer: RTC, streamId: unknown): void {
+    const tracks = new Set(peer.pc.getReceivers().map((receiver: RTCRtpReceiver) => receiver.track))
+    const streams = this.streams.filter(
+      (stream: MediaStream) => stream.id === streamId && stream.getTracks().some((track: MediaStreamTrack) => tracks.has(track)),
+    )
+    if (streams.length) this.removeStreams(streams)
   }
 
   async logConnectionType(peer: RTC): Promise<void> {

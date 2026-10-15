@@ -13,6 +13,7 @@
         :current-room-id="room?.roomid"
         @create-room="createRoom"
         @call="call"
+        @cancel="handleJoinCancel"
       ></Rooms>
       <footer class="sidebar-foot">
         <ShieldCheck />WebRTC 点对点加密传输
@@ -30,19 +31,62 @@
               </h1>
               <p class="room-desc" v-if="room.explain.tips">{{ room.explain.tips }}</p>
             </div>
-            <span class="pill"><Users />{{ peersLength + 1 }} 人</span>
+            <div class="stage-tools">
+              <button
+                type="button"
+                class="bar-btn"
+                :class="{ off: !remoteAudioOn }"
+                :aria-pressed="remoteAudioOn"
+                :data-tip="remoteAudioOn ? '关闭他人声音' : '打开他人声音'"
+                :aria-label="remoteAudioOn ? '关闭他人声音' : '打开他人声音'"
+                @click="remoteAudioOn = !remoteAudioOn"
+              >
+                <Volume2 v-if="remoteAudioOn" />
+                <VolumeX v-else />
+              </button>
+              <button
+                type="button"
+                class="bar-btn"
+                :class="{ off: !remoteVideoOn }"
+                :aria-pressed="remoteVideoOn"
+                :data-tip="remoteVideoOn ? '关闭他人画面' : '打开他人画面'"
+                :aria-label="remoteVideoOn ? '关闭他人画面' : '打开他人画面'"
+                @click="remoteVideoOn = !remoteVideoOn"
+              >
+                <Eye v-if="remoteVideoOn" />
+                <EyeOff v-else />
+              </button>
+              <span class="pill"><Users />{{ peersLength + 1 }} 人</span>
+            </div>
           </header>
 
-          <Play class="stage-media" :streams="streams">
-            <template #empty>
+          <Play
+            class="stage-media"
+            :streams="streams"
+            :hide-remote-video="!remoteVideoOn"
+            :mute-remote-audio="!remoteAudioOn"
+            :camera-switching="pendingMedia === 'cameraSwitch'"
+            @switch-camera="switchCamera"
+          >
+            <template #empty="{ hiddenCount }">
               <div class="stage-empty">
                 <div class="stage-empty-orb">
-                  <VideoOff v-if="peersLength" />
+                  <EyeOff v-if="hiddenCount" />
+                  <VideoOff v-else-if="peersLength" />
                   <Users v-else />
                 </div>
-                <h2>{{ peersLength ? "还没有人开启画面" : "等待其他人加入" }}</h2>
-                <p v-if="peersLength">打开摄像头或共享屏幕，开始视频通话</p>
-                <p v-else>让好友在房间列表里找到「{{ roomName }}」即可加入</p>
+                <template v-if="hiddenCount">
+                  <h2>已关闭他人画面</h2>
+                  <p>有 {{ hiddenCount }} 路画面没有显示</p>
+                  <button type="button" class="btn btn-ghost stage-empty-action" @click="remoteVideoOn = true">
+                    <Eye />打开他人画面
+                  </button>
+                </template>
+                <template v-else>
+                  <h2>{{ peersLength ? "还没有人开启画面" : "等待其他人加入" }}</h2>
+                  <p v-if="peersLength">打开摄像头或共享屏幕，开始视频通话</p>
+                  <p v-else>让好友在房间列表里找到「{{ roomName }}」即可加入</p>
+                </template>
               </div>
             </template>
           </Play>
@@ -88,17 +132,6 @@
               >
                 <MonitorUp />
               </button>
-              <button
-                v-if="isMobileView"
-                type="button"
-                class="ctrl"
-                :class="{ on: slefVideoBtnStatus.cameraSwitch }"
-                :aria-pressed="slefVideoBtnStatus.cameraSwitch"
-                aria-label="切换摄像头"
-                @click="selfMediaStatusChange('cameraSwitch')"
-              >
-                <SwitchCamera />
-              </button>
               <span class="ctrl-divider"></span>
               <button
                 type="button"
@@ -110,16 +143,18 @@
                 @click="isChatOpen = !isChatOpen"
               >
                 <MessageSquareText />
-                <span class="ctrl-badge" v-if="notReadMessage">
-                  {{ notReadMessage > 99 ? "99+" : notReadMessage }}
-                </span>
+                <transition name="badge-pop">
+                  <span class="ctrl-badge" v-if="notReadMessage">
+                    {{ notReadMessage > 99 ? "99+" : notReadMessage }}
+                  </span>
+                </transition>
               </button>
               <button
                 type="button"
                 class="ctrl ctrl-leave"
                 data-tip="离开房间"
                 aria-label="离开房间"
-                @click="leaveRoom"
+                @click="leaveRoom()"
               >
                 <PhoneOff />
               </button>
@@ -182,6 +217,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import {
+  Eye,
+  EyeOff,
   MessageSquareText,
   MessagesSquare,
   Mic,
@@ -190,17 +227,20 @@ import {
   PhoneOff,
   Plus,
   ShieldCheck,
-  SwitchCamera,
   Users,
   Video as VideoIcon,
   VideoOff,
+  Volume2,
+  VolumeX,
   Zap,
 } from "@lucide/vue";
+import { useRoute, useRouter } from "vue-router";
 import Rooms from "@/views/rooms.vue";
 import RTCManager from "@/views/rtc-manager";
 import Chat from "@/views/chat/index.vue";
 import { isMobile } from "@/tools";
 import { toast } from "@/tools/utils";
+import { removeRoomSecret } from "@/tools/room-auth";
 import Play from "@/views/play.vue";
 import socket from "@/socket";
 
@@ -265,6 +305,7 @@ interface RTCManagerLike {
   call: (data: { roomid: string; explain: RoomExplain; secret?: string }) => void;
   leave: () => void;
   setSelfMediaStatus: (config: Record<string, boolean>) => Promise<unknown>;
+  switchCamera: () => Promise<"switched" | "kept" | "off">;
   dcData: {
     on: (
       event: string,
@@ -309,7 +350,7 @@ declare global {
   }
 }
 
-type MediaKey = "audio" | "video" | "desktopShare" | "cameraSwitch";
+type MediaKey = "audio" | "video" | "desktopShare";
 
 const rtcManager = new RTCManager() as unknown as RTCManagerLike;
 
@@ -322,18 +363,25 @@ const slefVideoBtnStatus = reactive<Record<MediaKey, boolean>>({
   audio: false,
   desktopShare: false,
   video: false,
-  cameraSwitch: false,
 });
 const room = ref<RoomPayload | null>(null);
 const roomsRef = ref<InstanceType<typeof Rooms> | null>(null);
 const isChatOpen = ref(false);
 const notReadMessage = ref(0);
-const pendingMedia = ref<MediaKey | null>(null);
+const pendingMedia = ref<MediaKey | "cameraSwitch" | null>(null);
+// 接收方自己决定听不听、看不看别人，只影响本地播放
+const remoteAudioOn = ref(true);
+const remoteVideoOn = ref(true);
 const isMobileView = computed(() => isMobile);
 const isWide = useMediaQuery("(min-width: 1200px)");
 const roomName = computed(() => room.value?.explain.name || "未命名房间");
 // 手机浏览器基本不支持 getDisplayMedia，直接隐藏入口
 const canShareScreen = Boolean(navigator.mediaDevices?.getDisplayMedia);
+const route = useRoute();
+const router = useRouter();
+const routeRoomId = computed(() =>
+  route.name === "room" ? String(route.params.roomid) : "",
+);
 
 function useMediaQuery(query: string) {
   const mql = window.matchMedia(query);
@@ -369,6 +417,21 @@ async function selfMediaStatusChange(type: MediaKey) {
   }
 }
 
+async function switchCamera() {
+  if (pendingMedia.value) return;
+  pendingMedia.value = "cameraSwitch";
+  try {
+    const result = await rtcManager.switchCamera();
+    // 中途离开了房间就不用提示
+    if (result === "switched" || !slefVideoBtnStatus.video) return;
+    // 两个摄像头都没打开，摄像头按钮跟着复位
+    if (result === "off") slefVideoBtnStatus.video = false;
+    toast("切换摄像头失败");
+  } finally {
+    pendingMedia.value = null;
+  }
+}
+
 // 断开所有连接并关闭本地音视频，按钮状态一并复位
 function resetConnection() {
   rtcManager.clear();
@@ -381,7 +444,6 @@ function resetConnection() {
     audio: false,
     video: false,
     desktopShare: false,
-    cameraSwitch: false,
   });
 }
 
@@ -389,7 +451,17 @@ function enterRoom(data: RoomPayload) {
   chats.value = [];
   notReadMessage.value = 0;
   isChatOpen.value = isWide.value;
+  remoteAudioOn.value = true;
+  remoteVideoOn.value = true;
   room.value = data;
+  syncRoute();
+}
+
+// 地址跟着当前房间走，分享出去的链接就是房间地址
+function syncRoute(replace = false) {
+  const path = room.value ? `/room/${room.value.roomid}` : "/";
+  if (route.path === path) return;
+  void (replace ? router.replace(path) : router.push(path));
 }
 
 function createRoom(data: RoomPayload) {
@@ -404,7 +476,8 @@ function call({ roomid, roomInfo, secret }: { roomid: string; roomInfo: RoomPayl
   enterRoom(roomInfo);
 }
 
-function leaveRoom() {
+// replace：没进成的房间不留在浏览器历史里
+function leaveRoom(replace = false) {
   if (!room.value) return;
   rtcManager.leave();
   resetConnection();
@@ -412,19 +485,34 @@ function leaveRoom() {
   chats.value = [];
   isChatOpen.value = false;
   notReadMessage.value = 0;
+  syncRoute(replace);
 }
 
 // 点进去时房间已经没人被销毁了（本地列表还没刷新）
 function handleRoomMissing() {
   toast("房间已不存在");
-  leaveRoom();
+  leaveRoom(true);
 }
 
-// 服务端进房时密码校验没过（弹窗校验之后房间被销毁又被别人重建这类极端情况）
-function handleRoomDenied() {
+// 服务端进房时密码校验没过（本地存的密码过期、弹窗校验之后房间被销毁又被别人重建这类极端情况）
+function handleRoomDenied(roomid: string) {
+  removeRoomSecret(roomid);
   toast("密码错误");
-  leaveRoom();
+  leaveRoom(true);
 }
+
+// 按地址进房没进成（取消输密码、房间已不存在），地址退回当前所在房间
+function handleJoinCancel(roomid: string) {
+  if (room.value?.roomid === roomid) return;
+  syncRoute(true);
+}
+
+// 打开分享链接、刷新、浏览器前进后退时，按地址进出房间
+watch(routeRoomId, (roomid) => {
+  if (roomid === (room.value?.roomid ?? "")) return;
+  if (roomid) roomsRef.value?.jion(roomid);
+  else leaveRoom();
+});
 
 function sendTexts(texts: string[]) {
   if (!texts.length) return;
@@ -732,6 +820,55 @@ onBeforeUnmount(() => {
   }
 }
 
+.stage-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+.bar-btn {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  background: var(--surface);
+  transition:
+    background-color 0.2s,
+    color 0.2s,
+    transform var(--spring-duration) var(--ease-spring);
+
+  svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  &:hover {
+    color: var(--text);
+    background: var(--surface-hover);
+  }
+
+  &:active {
+    transform: scale(0.92);
+    transition:
+      background-color 0.2s,
+      color 0.2s,
+      transform 0.16s var(--ease);
+  }
+
+  // 关掉了才高亮，提醒自己现在听不到 / 看不到别人
+  &.off {
+    border-color: transparent;
+    color: var(--danger-text);
+    background: var(--danger-soft);
+  }
+}
+
 .stage-media {
   flex: 1;
 }
@@ -753,6 +890,10 @@ onBeforeUnmount(() => {
     font-size: 13px;
     color: var(--text-2);
   }
+}
+
+.stage-empty-action {
+  margin-top: 14px;
 }
 
 .stage-empty-orb {
@@ -803,7 +944,7 @@ onBeforeUnmount(() => {
   transition:
     background-color 0.2s,
     color 0.2s,
-    transform 0.15s var(--ease);
+    transform var(--spring-duration) var(--ease-spring);
 
   svg {
     width: 21px;
@@ -814,8 +955,13 @@ onBeforeUnmount(() => {
     background: var(--surface-active);
   }
 
+  // 按下用短缓出跟手，松开走弹簧回弹
   &:active:not(:disabled) {
     transform: scale(0.92);
+    transition:
+      background-color 0.2s,
+      color 0.2s,
+      transform 0.16s var(--ease);
   }
 
   &:disabled {
@@ -868,6 +1014,25 @@ onBeforeUnmount(() => {
   box-shadow: 0 0 0 2px var(--bg-stage);
 }
 
+// 有新未读时弹出来，提醒通话中的人去看聊天
+.badge-pop-enter-active {
+  transition:
+    opacity 0.2s var(--ease),
+    transform var(--spring-duration) var(--ease-spring);
+}
+
+.badge-pop-leave-active {
+  transition:
+    opacity 0.15s var(--ease),
+    transform 0.15s var(--ease);
+}
+
+.badge-pop-enter-from,
+.badge-pop-leave-to {
+  opacity: 0;
+  transform: scale(0.9);
+}
+
 @media (hover: hover) {
   .ctrl[data-tip]::after {
     content: attr(data-tip);
@@ -891,6 +1056,34 @@ onBeforeUnmount(() => {
   }
 
   .ctrl[data-tip]:hover::after {
+    opacity: 1;
+    translate: -50% 0;
+  }
+
+  // 顶栏按钮的提示往下弹
+  .bar-btn[data-tip]::after {
+    content: attr(data-tip);
+    position: absolute;
+    top: calc(100% + 10px);
+    left: 50%;
+    z-index: 5;
+    padding: 5px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+    color: var(--text);
+    background: var(--bg-elevated);
+    opacity: 0;
+    translate: -50% -4px;
+    pointer-events: none;
+    transition:
+      opacity 0.15s,
+      translate 0.15s var(--ease);
+  }
+
+  .bar-btn[data-tip]:hover::after {
     opacity: 1;
     translate: -50% 0;
   }

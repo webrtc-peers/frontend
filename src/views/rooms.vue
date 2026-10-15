@@ -89,11 +89,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { DoorOpen, Lock, Plus, Users } from '@lucide/vue'
 import socket from '@/socket'
 import { v4 as uuidv4 } from 'uuid'
 import { toast } from '@/tools/utils'
+import { getRoomSecret, pruneRoomSecrets, saveRoomSecret } from '@/tools/room-auth'
 import VDialog from '@/components/v-dialog.vue'
 import VInput from '@/components/v-input.vue'
 
@@ -120,6 +121,8 @@ const props = defineProps<{
 const emit = defineEmits<{
 	(e: 'create-room', payload: { explain: RoomExplain; roomid: string }): void
 	(e: 'call', payload: { roomid: string; roomInfo: RoomInfo & { roomid: string }; secret: string }): void
+	// 没进成房间：关了密码框、房间已不存在
+	(e: 'cancel', roomid: string): void
 }>()
 
 const rooms = ref<RoomsMap | null>(null)
@@ -131,6 +134,8 @@ const secret = ref('')
 const fillSecret = ref('')
 const secretDialog = ref(false)
 const secretError = ref('')
+// 打开链接时房间列表可能还没收到，先记下，收到后再进
+let pendingRoomId = ''
 
 const roomList = computed(() => Object.entries(rooms.value ?? {}).map(([id, info]) => ({ id, info })))
 const pickedRoomName = computed(() => {
@@ -149,6 +154,8 @@ function openCreate() {
 function createRoom() {
 	picked.value = uuidv4()
 	dialogVisible.value = false
+	// 房主刷新后也不用再输自己设的密码
+	if (secret.value) saveRoomSecret(picked.value, secret.value)
 	emit('create-room', {
 		explain: { name: name.value.trim(), tips: tips.value.trim(), secret: secret.value },
 		roomid: picked.value,
@@ -162,12 +169,23 @@ function jion(nextPicked: string) {
 	if (!nextPicked) {
 		return toast('请先选择房间')
 	}
-	const data = rooms.value?.[nextPicked]
-	if (!data) return
+	if (!rooms.value) {
+		pendingRoomId = nextPicked
+		return
+	}
 	if (props.currentRoomId === nextPicked) return
+	const data = rooms.value[nextPicked]
+	if (!data) {
+		toast('房间已不存在')
+		emit('cancel', nextPicked)
+		return
+	}
 
 	picked.value = nextPicked
 	if (data.explain.locked) {
+		// 输对过的密码直接用，进房时服务端还会再校验一次
+		const saved = getRoomSecret(nextPicked)
+		if (saved !== undefined) return enter(nextPicked, saved)
 		fillSecret.value = ''
 		secretError.value = ''
 		secretDialog.value = true
@@ -195,11 +213,28 @@ const handleCheckSecret = ({ roomid, ok }: { roomid: string; ok: boolean }) => {
 		secretError.value = '密码错误'
 		return
 	}
+	saveRoomSecret(roomid, fillSecret.value)
 	enter(roomid, fillSecret.value)
 }
 
+// 进房成功也会关弹窗，那时父组件已经切到这个房间，由父组件区分
+watch(secretDialog, (open) => {
+	if (!open) emit('cancel', picked.value)
+})
+
 const handleRooms = (nextRooms: RoomsMap) => {
 	rooms.value = nextRooms
+	// 列表是全量的，不在里面的房间已经销毁，密码没用了；
+	// 当前房间断线重连时可能暂时不在列表里，先留着
+	const alive = Object.keys(nextRooms)
+	if (props.currentRoomId) alive.push(props.currentRoomId)
+	pruneRoomSecrets(alive)
+
+	if (pendingRoomId) {
+		const roomid = pendingRoomId
+		pendingRoomId = ''
+		jion(roomid)
+	}
 }
 
 socket.on('rooms', handleRooms)
@@ -210,7 +245,7 @@ onBeforeUnmount(() => {
 	socket.off('check-secret', handleCheckSecret)
 })
 
-defineExpose({ openCreate })
+defineExpose({ openCreate, jion })
 </script>
 
 <style lang="scss">
@@ -269,10 +304,19 @@ defineExpose({ openCreate })
 		text-align: left;
 		transition:
 			background-color 0.2s,
-			border-color 0.2s;
+			border-color 0.2s,
+			transform var(--spring-duration) var(--ease-spring);
 
 		&:hover {
 			background: var(--surface-hover);
+		}
+
+		&:active {
+			transform: scale(0.97);
+			transition:
+				background-color 0.2s,
+				border-color 0.2s,
+				transform 0.16s var(--ease);
 		}
 
 		&.active {

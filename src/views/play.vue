@@ -3,11 +3,15 @@
 		<audio
 			v-for="stream in audioStreams"
 			:key="stream.id"
-			:ref="el => attach(el, stream)"
+			:ref="el => attach(el, stream, 'audio')"
 			class="rtc-audio"
 			autoplay
-			:muted="stream.isSelf"
+			:muted="muteRemoteAudio"
 		></audio>
+
+		<button v-if="audioBlocked" type="button" class="media-unlock" @click="resumeBlocked">
+			<Volume2 />轻触开启声音
+		</button>
 
 		<div
 			v-if="videoStreams.length"
@@ -18,13 +22,14 @@
 				v-for="stream in videoStreams"
 				:key="stream.id"
 				class="rtc-video"
-				:class="{ self: stream.isSelf, screen: isScreen(stream) }"
+				:class="{ self: stream.isSelf, screen: isScreen(stream), rear: isRearCamera(stream) }"
 			>
+				<!-- 声音统一走上面的 audio，画面始终静音：不静音的视频在 iOS 上常被自动播放策略拦下，只剩一个黑框 -->
 				<video
-					:ref="el => attach(el, stream)"
+					:ref="el => attach(el, stream, 'video')"
 					autoplay
 					playsinline
-					:muted="stream.isSelf"
+					muted
 					@loadedmetadata="updateRatio($event, stream)"
 					@resize="updateRatio($event, stream)"
 					@click="toggle"
@@ -33,35 +38,70 @@
 				<button type="button" class="tile-fullscreen" aria-label="全屏" @click="fullscreen(stream)">
 					<Maximize2 />
 				</button>
+				<button
+					v-if="canSwitchCamera && stream.isSelf && !isScreen(stream)"
+					type="button"
+					class="tile-switch"
+					aria-label="切换摄像头"
+					:disabled="cameraSwitching"
+					@click="emit('switch-camera')"
+				>
+					<SwitchCamera />
+				</button>
+				<button v-if="blocked.has(mediaKey(stream, 'video'))" type="button" class="tile-play" @click="resumeBlocked">
+					<Play />轻触播放
+				</button>
 			</figure>
 		</div>
 
 		<div v-else class="media-empty">
-			<slot name="empty"></slot>
+			<slot name="empty" :hidden-count="hiddenVideoCount"></slot>
 		</div>
 	</div>
 </template>
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import { Maximize2 } from '@lucide/vue'
+import { Maximize2, Play, SwitchCamera, Volume2 } from '@lucide/vue'
+import { isMobile } from '@/tools'
 
 interface StreamWithType extends MediaStream {
 	isSelf?: boolean
 }
 
+type MediaKind = 'audio' | 'video'
+
 const props = defineProps<{
 	streams: StreamWithType[]
+	// 接收方自己关掉别人的画面 / 声音，只影响本地播放
+	hideRemoteVideo?: boolean
+	muteRemoteAudio?: boolean
+	cameraSwitching?: boolean
 }>()
 
+const emit = defineEmits<{ 'switch-camera': [] }>()
+
+// 电脑一般只有一个摄像头，前后切换只在手机上给
+const canSwitchCamera = isMobile
+
 const elements = new Map<string, HTMLMediaElement>()
+// 被浏览器自动播放策略拦下来的元素，等用户点一下再补播
+const blocked = reactive(new Set<string>())
 
 const uniqueStreams = computed(() => {
 	const seen = new Set<string>()
 	return props.streams.filter(stream => !seen.has(stream.id) && seen.add(stream.id))
 })
-const videoStreams = computed(() => uniqueStreams.value.filter(stream => stream.getVideoTracks().length))
-const audioStreams = computed(() => uniqueStreams.value.filter(stream => !stream.getVideoTracks().length))
+const remoteVideoStreams = computed(() => uniqueStreams.value.filter(stream => !stream.isSelf && stream.getVideoTracks().length))
+const videoStreams = computed(() =>
+	uniqueStreams.value.filter(stream => stream.getVideoTracks().length && (stream.isSelf || !props.hideRemoteVideo)),
+)
+const hiddenVideoCount = computed(() => (props.hideRemoteVideo ? remoteVideoStreams.value.length : 0))
+// 自己的声音不用播
+const audioStreams = computed(() => uniqueStreams.value.filter(stream => !stream.isSelf && stream.getAudioTracks().length))
+const audioBlocked = computed(
+	() => !props.muteRemoteAudio && audioStreams.value.some(stream => blocked.has(mediaKey(stream, 'audio'))),
+)
 
 const GAP = 10
 const MIN_TILE_WIDTH = 160
@@ -110,7 +150,11 @@ const layout = computed(() => {
 	}
 })
 
+// iOS（微信内置浏览器、低电量模式下更严）没有用户手势时会拒绝播放，页面上任意一次点击都拿来补播
+const GESTURES = ['click', 'touchend'] as const
+
 onMounted(() => {
+	GESTURES.forEach(type => document.addEventListener(type, resumeBlocked, true))
 	if (!rootRef.value) return
 	resizeObserver = new ResizeObserver(([entry]) => {
 		box.width = entry.contentRect.width
@@ -119,15 +163,47 @@ onMounted(() => {
 	resizeObserver.observe(rootRef.value)
 })
 
-onBeforeUnmount(() => resizeObserver?.disconnect())
+onBeforeUnmount(() => {
+	GESTURES.forEach(type => document.removeEventListener(type, resumeBlocked, true))
+	resizeObserver?.disconnect()
+})
 
-function attach(element: unknown, stream: MediaStream) {
+function mediaKey(stream: MediaStream, kind: MediaKind) {
+	return `${kind}:${stream.id}`
+}
+
+function attach(element: unknown, stream: MediaStream, kind: MediaKind) {
+	const key = mediaKey(stream, kind)
 	if (!(element instanceof HTMLMediaElement)) {
-		elements.delete(stream.id)
+		elements.delete(key)
+		blocked.delete(key)
 		return
 	}
-	elements.set(stream.id, element)
-	if (element.srcObject !== stream) element.srcObject = stream
+	elements.set(key, element)
+	// 切换摄像头时流还是同一个、只换了 track，iOS 不会自己切过去，track 变了也要重新挂
+	const tracks = stream.getTracks().map(track => track.id).join()
+	if (element.srcObject === stream && element.dataset.tracks === tracks) return
+	element.dataset.tracks = tracks
+	element.srcObject = stream
+	// 只靠 autoplay 的话被拦了没有任何提示，主动 play 才能知道要不要让用户点一下
+	play(element, key)
+}
+
+function play(element: HTMLMediaElement, key: string) {
+	element
+		.play()
+		.then(() => blocked.delete(key))
+		.catch((e: DOMException) => {
+			if (e.name === 'NotAllowedError' && elements.get(key) === element) blocked.add(key)
+		})
+}
+
+// 必须在手势事件里同步调用 play 才算用户触发
+function resumeBlocked() {
+	blocked.forEach(key => {
+		const element = elements.get(key)
+		if (element) play(element, key)
+	})
 }
 
 function updateRatio(event: Event, stream: MediaStream) {
@@ -138,6 +214,10 @@ function updateRatio(event: Event, stream: MediaStream) {
 function isScreen(stream: StreamWithType) {
 	const settings = stream.getVideoTracks()[0]?.getSettings() as MediaTrackSettings & { displaySurface?: string }
 	return Boolean(settings?.displaySurface)
+}
+
+function isRearCamera(stream: StreamWithType) {
+	return stream.getVideoTracks()[0]?.getSettings().facingMode === 'environment'
 }
 
 function label(stream: StreamWithType) {
@@ -158,13 +238,14 @@ function toggle(event: MouseEvent) {
 }
 
 function fullscreen(stream: MediaStream) {
-	const video = elements.get(stream.id)
+	const video = elements.get(mediaKey(stream, 'video'))
 	if (video instanceof HTMLVideoElement) requestFullscreen(video)
 }
 </script>
 
 <style lang="scss">
 .media-content {
+	position: relative;
 	display: flex;
 	flex-direction: column;
 	min-height: 0;
@@ -173,6 +254,33 @@ function fullscreen(stream: MediaStream) {
 
 .rtc-audio {
 	display: none;
+}
+
+.media-unlock,
+.tile-play {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	padding: 8px 16px;
+	border-radius: 99px;
+	font-size: 13px;
+	font-weight: 600;
+	color: #fff;
+	background: rgb(0 0 0 / 0.72);
+	box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.14);
+
+	svg {
+		width: 16px;
+		height: 16px;
+	}
+}
+
+.media-unlock {
+	position: absolute;
+	top: 10px;
+	left: 50%;
+	z-index: 2;
+	translate: -50% 0;
 }
 
 .video-grid {
@@ -192,7 +300,9 @@ function fullscreen(stream: MediaStream) {
 	overflow: hidden;
 	background: #141715;
 	box-shadow: inset 0 0 0 1px var(--border);
-	animation: tile-in 0.4s var(--ease);
+	animation:
+		tile-fade 0.2s var(--ease),
+		tile-pop var(--spring-duration) var(--ease-spring);
 
 	video {
 		width: 100%;
@@ -201,9 +311,12 @@ function fullscreen(stream: MediaStream) {
 		cursor: zoom-in;
 	}
 
-	// 自己的摄像头：铺满并镜像，符合照镜子的直觉
+	// 自己的摄像头：铺满并镜像，符合照镜子的直觉；后置摄像头不镜像，否则字是反的
 	&.self:not(.screen) video {
 		object-fit: cover;
+	}
+
+	&.self:not(.screen):not(.rear) video {
 		transform: scaleX(-1);
 	}
 
@@ -250,6 +363,35 @@ function fullscreen(stream: MediaStream) {
 			display: none;
 		}
 	}
+
+	.tile-switch {
+		position: absolute;
+		right: 10px;
+		bottom: 10px;
+		display: grid;
+		place-items: center;
+		width: 36px;
+		height: 36px;
+		border-radius: 99px;
+		color: #fff;
+		background: rgb(0 0 0 / 0.6);
+
+		svg {
+			width: 18px;
+			height: 18px;
+		}
+
+		&:disabled svg {
+			opacity: 0.5;
+		}
+	}
+
+	.tile-play {
+		position: absolute;
+		top: 50%;
+		left: 50%;
+		translate: -50% -50%;
+	}
 }
 
 .media-empty {
@@ -260,9 +402,14 @@ function fullscreen(stream: MediaStream) {
 	padding: 24px;
 }
 
-@keyframes tile-in {
+@keyframes tile-fade {
 	from {
 		opacity: 0;
+	}
+}
+
+@keyframes tile-pop {
+	from {
 		transform: scale(0.96);
 	}
 }
